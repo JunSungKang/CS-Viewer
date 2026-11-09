@@ -1,0 +1,36 @@
+name: Governance
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, assigned, unassigned]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  evaluate:
+    name: Governance / current-head
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate human author and current-head App approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}")"
+          reviews="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews")"
+          jq -e --arg head "${HEAD_SHA}" '
+            .base.ref == "main" and .head.sha == $head and
+            .user.login == "JunSungKang" and
+            (.assignees | any(.login == "JunSungKang"))
+          ' <<<"${pr}" >/dev/null
+          jq -e --arg head "${HEAD_SHA}" '
+            flatten | map(select(.user.login == "junsung-bot[bot]" and .commit_id == $head)) |
+            sort_by(.submitted_at) | last |
+            .state == "APPROVED" and
+            (.body | contains("Codex-assisted independent review")) and
+            (.body | contains($head))
+          ' <<<"${reviews}" >/dev/null

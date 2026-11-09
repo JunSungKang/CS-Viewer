@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "prAuthorLogin": "JunSungKang",
+  "assigneeLogin": "JunSungKang",
+  "reviewerLogin": "junsung-bot[bot]",
+  "requiredChecks": [
+    "Tests / backend",
+    "Governance / current-head"
+  ],
+  "pushActorLogin": "JunSungKang",
+  "protectedBranches": [
+    "main"
+  ],
+  "integrationBranch": "main",
+  "releaseBranch": "main",
+  "mergeMethods": {
+    "integration": "squash",
+    "promotion": "merge"
+  },
+  "checkProviders": {
+    "Tests / backend": 15368,
+    "Governance / current-head": 15368
+  }
+}

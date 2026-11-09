@@ -1,0 +1,39 @@
+name: platform
+services:
+  cs-viewer-web:
+    image: platform/cs-viewer:${CS_VIEWER_IMAGE_TAG:-ubuntu26.04-20261110-r4}
+    container_name: cs-viewer-web
+    user: "${CS_VIEWER_UID:-65532}:${CS_VIEWER_GID:-65532}"
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-platform/python314:ubuntu26.04-20261109-r2}
+    pull_policy: never
+    restart: unless-stopped
+    ports: ['127.0.0.1:20035:8080']
+    networks: [cs-viewer-private]
+    environment:
+      CS_PASSWORD_FILE: /run/secrets/cs-viewer-password
+      CS_AGENT_TOKEN_FILE: /run/secrets/cs-viewer-agent
+      CS_AGENT_URL: http://host.docker.internal:20135
+      CS_ALLOWED_ORIGINS: ${CS_ALLOWED_ORIGINS:-http://127.0.0.1:20035,http://localhost:20035}
+    secrets: [cs-viewer-password, cs-viewer-agent]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    cpus: 1
+    labels:
+      com.cs-viewer.module: cs-viewer
+      com.cs-viewer.role: web
+    logging:
+      driver: local
+      options: {max-size: 10m, max-file: '3'}
+secrets:
+  cs-viewer-password:
+    file: ${CS_VIEWER_PASSWORD_FILE:?Set a local password file}
+  cs-viewer-agent:
+    file: ${CS_VIEWER_AGENT_TOKEN_FILE:?Set a local agent token file}
+networks:
+  cs-viewer-private:
+    name: platform_cs-viewer

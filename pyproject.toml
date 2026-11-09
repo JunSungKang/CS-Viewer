@@ -1,0 +1,6 @@
+[project]
+name = "cs-viewer"
+version = "1.0.0"
+description = "Private Docker container operations console"
+requires-python = ">=3.14"
+dependencies = []
