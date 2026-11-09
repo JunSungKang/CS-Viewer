@@ -63,11 +63,12 @@ function spark(items,module){
 }
 function renderBoard(){
   const d=state.data,host=d.host_memory||{},daemon=d.daemon||{},members=d.containers||[];
+  const postgres=members.find(container=>container.role==='postgresql');
   const infra=(title,value,detail)=>el('section',{class:'infra-card'},el('h3',{},title),el('div',{class:'number'},value),el('small',{},detail));
   put('#infra',infra('호스트 메모리',bytes(host.total),`사용 추정 ${bytes(host.used_estimate)} · Mac 물리 메모리`),
     infra('Docker VM 메모리',bytes(daemon.memory_total),`컨테이너 사용 합계 ${bytes(members.reduce((n,c)=>n+(c.memory_bytes||0),0))} · VM 총량과 구분`),
     infra('공통 인프라',`${members.filter(c=>c.state==='running').length} / ${members.length} 실행`,
-      'PostgreSQL '+(members.find(c=>c.role==='postgresql')?label(members.find(c=>c.role==='postgresql')):'조회 불가')));
+      '관리 대상 · PostgreSQL '+(postgres?label(postgres)+' · '+ports(postgres):'조회 불가')));
   const services=[...(d.services||[])].sort((a,b)=>Number(Boolean(b.error))-Number(Boolean(a.error))||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
   put('#services',services.length?services.map(s=>{
     const history=d.trends?.[s.module]||[],containers=members.filter(c=>c.module===s.module);

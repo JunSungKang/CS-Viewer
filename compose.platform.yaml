@@ -1,7 +1,7 @@
 name: platform
 services:
   cs-viewer-web:
-    image: platform/cs-viewer:${CS_VIEWER_IMAGE_TAG:-ubuntu26.04-20261110-r6}
+    image: platform/cs-viewer:${CS_VIEWER_IMAGE_TAG:-ubuntu26.04-20261110-r7}
     container_name: cs-viewer-web
     user: "${CS_VIEWER_UID:-65532}:${CS_VIEWER_GID:-65532}"
     build:
