@@ -17,6 +17,15 @@ function time(value){return value?new Date(value*1000).toLocaleTimeString('ko-KR
 function badge(text,kind=''){return el('span',{class:'badge '+kind},text);}
 function notice(message,bad=false){$('#notice').hidden=!message;$('#notice').className='notice'+(bad?' bad':'');$('#notice').textContent=message||'';}
 function ports(container){return container.ports.length?[...new Set(container.ports.map(p=>`${p.host.includes(':')?'['+p.host+']':p.host}:${p.port} → ${p.container}`))].join(' / '):'호스트 공개 포트 없음';}
+function boardPorts(containers){
+  const groups=new Map();
+  for(const port of containers.flatMap(container=>container.ports)){
+    const host=['0.0.0.0','::'].includes(port.host)?'전체':port.host||'기본 바인딩';
+    if(!groups.has(host))groups.set(host,new Map());
+    groups.get(host).set(port.port+'/'+port.container,{port:Number(port.port),text:port.port+' → '+port.container.replace(/\/tcp$/,'')});
+  }
+  return [...groups].map(([host,pairs])=>el('div',{},host+' · '+[...pairs.values()].sort((a,b)=>a.port-b.port).map(pair=>pair.text).join(' · ')));
+}
 function label(container){return container.health==='unhealthy'?'헬스 이상':container.state!=='running'?'중지':container.health==='healthy'?'헬스 정상':'실행 중';}
 function stale(){return !state.data?.collected_at || Boolean(state.data.error) || Date.now()/1000-state.data.collected_at>Math.max(45,(state.data.interval||10)*3);}
 async function api(path,body,timeout=8000){
@@ -64,13 +73,13 @@ function renderBoard(){
     const history=d.trends?.[s.module]||[],containers=members.filter(c=>c.module===s.module);
     const status=s.unhealthy?'헬스 이상':s.oom_history?'OOM 이력':s.error?s.error:s.running<s.total?'일부 중지':s.status>=200&&s.status<300?'HTTP 정상':'HTTP '+s.status;
     return el('article',{class:'service-card'},el('div',{class:'card-heading'},el('h2',{},s.module),badge(status,s.error||s.unhealthy?'bad':s.oom_history||s.running<s.total?'warn':s.status<300?'good':'warn')),
-      el('div',{class:'ports'},containers.filter(c=>c.ports.length).map(c=>el('div',{},ports(c)))),
+      el('div',{class:'ports'},boardPorts(containers)),
       el('div',{class:'http-value'},s.http_ms===null?'—':s.http_ms.toFixed(1),el('span',{},'ms')),
       el('div',{class:'service-timings'},el('span',{},'연결 '+(s.tcp_ms===null?'—':s.tcp_ms.toFixed(1)+' ms')),el('span',{},'최근 p95 '+p95(history))),spark(history,s.module),
       el('div',{class:'resource'},el('span',{},'CPU ',el('strong',{},s.cpu_percent===null?'—':s.cpu_percent+'%')),el('span',{},'MEM ',el('strong',{},bytes(s.memory_bytes))),el('span',{},'실행 ',el('strong',{},s.running+' / '+s.total))),
       s.restarts?el('p',{class:'footnote'},'컨테이너 자동 재시작 누적 '+s.restarts+'회'+(s.oom_history?' · 메모리 부족 종료 이력':'')):null);
   }):el('p',{class:'empty'},'첫 측정을 수집하고 있습니다.'));
-  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 표시 / 24시간 보관 · 빨간 점은 측정 실패 · 연결 시간은 HTTPS에서 TLS를 포함합니다.`;
+  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 24시간 보관 · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
 }
 function options(select,values,current){const keys=values.map(v=>v[0]);if(!keys.includes(current))current=keys[0]||null;const signature=JSON.stringify(values);if(select.dataset.options!==signature){select.replaceChildren(...values.map(([key,text])=>el('option',{value:key},text)));select.dataset.options=signature;}if(current!==null)select.value=current;return current;}
 function renderContainers(){

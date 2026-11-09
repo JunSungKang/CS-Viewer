@@ -1,5 +1,5 @@
 variable "PYTHON_IMAGE" { default = "platform/python314:ubuntu26.04-20261109-r2" }
-variable "CS_VIEWER_IMAGE_TAG" { default = "ubuntu26.04-20261110-r5" }
+variable "CS_VIEWER_IMAGE_TAG" { default = "ubuntu26.04-20261110-r6" }
 group "default" { targets = ["cs-viewer"] }
 target "cs-viewer" {
   context = "."
