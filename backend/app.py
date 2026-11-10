@@ -18,7 +18,7 @@ WEB = Path(__file__).resolve().parents[1] / 'web'
 
 
 class Application:
-    def __init__(self, password, agent_token, agent_url, origins):
+    def __init__(self, password, agent_token, agent_url, origins, *, allow_remote_http=False):
         if len(password) < 16 or len(agent_token) < 32:
             raise ValueError('Use generated secrets with at least 16/32 characters')
         self.salt = secrets.token_bytes(32)
@@ -31,8 +31,8 @@ class Application:
             parsed = urlsplit(origin)
             if parsed.scheme not in ('http', 'https') or not parsed.netloc or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment:
                 raise ValueError('Use canonical HTTP(S) origins without paths')
-            if parsed.scheme == 'http' and parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
-                raise ValueError('Non-loopback browser access requires HTTPS')
+            if parsed.scheme == 'http' and parsed.hostname not in ('localhost', '127.0.0.1', '::1') and allow_remote_http is not True:
+                raise ValueError('Non-loopback HTTP requires explicit CS_ALLOW_REMOTE_HTTP=1')
         self.hosts = {urlsplit(origin).netloc for origin in self.origins}
         self.secure_cookie = all(urlsplit(origin).scheme == 'https' for origin in self.origins)
         self.lock = threading.Lock()
@@ -166,7 +166,8 @@ def main():
     app = Application(Path(os.environ['CS_PASSWORD_FILE']).read_text().strip(),
                       Path(os.environ['CS_AGENT_TOKEN_FILE']).read_text().strip(),
                       os.environ.get('CS_AGENT_URL', 'http://host.docker.internal:20135'),
-                      os.environ.get('CS_ALLOWED_ORIGINS', 'http://127.0.0.1:20035,http://localhost:20035').split(','))
+                      os.environ.get('CS_ALLOWED_ORIGINS', 'http://127.0.0.1:20035,http://localhost:20035').split(','),
+                      allow_remote_http=os.environ.get('CS_ALLOW_REMOTE_HTTP') == '1')
     server = Server((args.bind, args.port), make_handler(app))
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
     try:

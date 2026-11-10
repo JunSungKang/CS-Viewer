@@ -2,9 +2,9 @@
 
 ## 접근과 제어
 
-- 단일 운영 계정 `operator`, CSPRNG 비밀번호, HttpOnly/SameSite=Strict 세션, Origin/CSRF 검증을 적용한다. HTTPS origin에서 발급한 cookie는 로컬 origin 혼용 여부와 관계없이 Secure로 설정한다. 외부 HTTP origin 설정은 거절한다.
+- 단일 운영 계정 `operator`, CSPRNG 비밀번호, HttpOnly/SameSite=Strict 세션, Origin/CSRF 검증을 적용한다. HTTPS origin에서 발급한 cookie는 로컬 origin 혼용 여부와 관계없이 Secure로 설정한다. 외부 HTTP origin은 기본 거절하며 운영자가 `CS_ALLOW_REMOTE_HTTP=1`을 지정한 경우에만 허용한다. 원격 HTTP는 전송 암호화를 제공하지 않는다.
 - 세션은 최대 8시간·유휴 30분이다. 서버 재시작 시 로그아웃된다. 로그인 실패는 IP와 전체 시도 수를 제한한다.
-- 허용 Host와 Origin을 명시한다. 임의 X-Forwarded-* 헤더를 신뢰하지 않는다. 외부 접근은 인증된 사설 경로나 HTTPS reverse proxy와 정확한 `CS_ALLOWED_ORIGINS` 설정을 사용한다.
+- 허용 Host와 Origin을 명시한다. 임의 X-Forwarded-* 헤더를 신뢰하지 않는다. 호스트 `0.0.0.0:20035`에서 내부 `8080`으로 연결하며, 실제 접속 주소를 `CS_ALLOWED_ORIGINS`에 지정한다. HTTPS reverse proxy를 사용하면 외부 HTTP 허용 옵션을 끈다.
 - 에이전트는 loopback만 수신하며 별도 비밀 토큰을 요구한다. Docker socket 접근은 호스트 에이전트에만 있다. 이 토큰과 호스트 실행 권한은 신뢰 경계이다.
 - 앱 컨테이너는 읽기 전용 파일시스템, 비 root UID, capability 제거, no-new-privileges, 메모리/CPU 제한을 사용한다. 실제 비밀 파일 소유 UID/GID를 Compose에 전달한다.
 - JSON 요청은 8KiB 이하, 전체 동시 연결은 32개로 제한한다. 환경변수·키·건강 검사 로그·메일 본문을 API 응답과 로그에 포함하지 않는다.

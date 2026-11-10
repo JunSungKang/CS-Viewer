@@ -14,7 +14,7 @@ Docker 컨테이너의 상태·실제 포트·공유 이미지 계층·영속 �
 ## 실행 구조
 
 ```text
-브라우저 → 웹/API 컨테이너 (내부 8080, 로컬 20035)
+브라우저 → 웹/API 컨테이너 (0.0.0.0:20035 → 내부 8080)
               ↓ 별도 비밀 토큰
            macOS 호스트 에이전트 (127.0.0.1:20135)
               ├─ 고정한 Docker context의 Unix socket
@@ -40,7 +40,9 @@ docker --context desktop-linux compose --env-file /absolute/workspace/operations
 docker --context desktop-linux compose --env-file /absolute/workspace/operations/cs-viewer/compose.env -f compose.platform.yaml up -d --no-build cs-viewer-web
 ```
 
-접속 주소는 **http://127.0.0.1:20035**, 계정은 `operator`입니다. 비밀번호는 로컬 비밀 파일에서 확인합니다. 모바일 외부 접근은 별도의 사설 연결 또는 인증된 HTTPS 경로가 필요합니다. 기본 설정은 loopback으로만 공개합니다.
+호스트의 모든 IPv4 인터페이스 **0.0.0.0:20035**를 컨테이너 **8080**으로 연결합니다. 브라우저에서는 `0.0.0.0` 대신 서버 IP나 도메인을 사용합니다. 계정은 `operator`이며 비밀번호는 로컬 비밀 파일에서 확인합니다.
+
+`CS_ALLOWED_ORIGINS`에 실제 접속할 주소를 정확히 지정합니다. 기본 허용 주소는 로컬뿐입니다. 원격 HTTP로 운영하려면 운영자 선택으로 `CS_ALLOW_REMOTE_HTTP=1`을 지정합니다. 이 모드는 전송 암호화를 제공하지 않으며 로그인·Host/Origin·CSRF 검증은 유지합니다. HTTPS 경로를 사용하면 이 옵션을 끄고 HTTPS origin을 지정합니다. 호스트 에이전트 포트는 loopback으로 유지합니다.
 
 ## 검증
 

@@ -1,7 +1,7 @@
 name: platform
 services:
   cs-viewer-web:
-    image: platform/cs-viewer:${CS_VIEWER_IMAGE_TAG:-ubuntu26.04-20261110-r7}
+    image: platform/cs-viewer:${CS_VIEWER_IMAGE_TAG:-ubuntu26.04-20261110-r8}
     container_name: cs-viewer-web
     user: "${CS_VIEWER_UID:-65532}:${CS_VIEWER_GID:-65532}"
     build:
@@ -10,13 +10,14 @@ services:
         PYTHON_IMAGE: ${PYTHON_IMAGE:-platform/python314:ubuntu26.04-20261109-r2}
     pull_policy: never
     restart: unless-stopped
-    ports: ['127.0.0.1:20035:8080']
+    ports: ['0.0.0.0:20035:8080']
     networks: [cs-viewer-private]
     environment:
       CS_PASSWORD_FILE: /run/secrets/cs-viewer-password
       CS_AGENT_TOKEN_FILE: /run/secrets/cs-viewer-agent
       CS_AGENT_URL: http://host.docker.internal:20135
       CS_ALLOWED_ORIGINS: ${CS_ALLOWED_ORIGINS:-http://127.0.0.1:20035,http://localhost:20035}
+      CS_ALLOW_REMOTE_HTTP: ${CS_ALLOW_REMOTE_HTTP:-0}
     secrets: [cs-viewer-password, cs-viewer-agent]
     read_only: true
     cap_drop: [ALL]

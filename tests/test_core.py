@@ -236,6 +236,26 @@ class WebTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('; Secure', headers['Set-Cookie'])
 
+    def test_remote_http_opt_in_preserves_auth_host_origin_and_csrf(self):
+        origin = 'http://control.example.invalid:20035'
+        for disabled in (False, '1'):
+            with self.assertRaises(ValueError):
+                Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', [origin], allow_remote_http=disabled)
+        self.app = Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', [origin], allow_remote_http=True)
+        self.server.RequestHandlerClass = make_handler(self.app)
+        headers = {'Host': 'control.example.invalid:20035', 'Origin': origin}
+        self.assertEqual(self.request('GET', '/api/state', **headers)[0], 401)
+        status, data, response = self.request('POST', '/api/login', {'username': 'operator', 'password': 'test-password-for-local-unit-tests'}, **headers)
+        self.assertEqual(status, 200)
+        cookie = response['Set-Cookie'].split(';')[0]
+        self.assertNotIn('; Secure', response['Set-Cookie'])
+        self.assertIn('; HttpOnly; SameSite=Strict;', response['Set-Cookie'])
+        self.assertEqual(self.request('GET', '/api/session', Cookie=cookie, **headers)[0], 200)
+        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **headers)[0], 403)
+        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **{**headers, 'Origin': 'http://other.invalid:20035', 'X-CSRF-Token': data['csrf']})[0], 403)
+        self.assertEqual(self.request('GET', '/', **{**headers, 'Host': 'other.invalid:20035'})[0], 403)
+        self.assertEqual(self.request('POST', '/api/logout', {}, Cookie=cookie, **{**headers, 'X-CSRF-Token': data['csrf']})[0], 200)
+
 
 class ResourceTests(unittest.TestCase):
     def test_engine_cpu_delta_and_cgroup_cache_subtraction(self):
