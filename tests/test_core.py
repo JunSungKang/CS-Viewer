@@ -1,5 +1,6 @@
 import copy
 import http.client
+from http.server import BaseHTTPRequestHandler
 import json
 from pathlib import Path
 import tempfile
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import patch
 import uuid
 
-from backend.agent import Agent, deploy_lock, load_config, make_handler as agent_handler
+from backend.agent import Agent, deploy_lock, load_config, make_handler as agent_handler, probe
 from backend.app import Application, make_handler
 from backend.engine import resource_usage, EngineError
 from backend.http_support import APIError, Server
@@ -255,6 +256,39 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **{**headers, 'Origin': 'http://other.invalid:20035', 'X-CSRF-Token': data['csrf']})[0], 403)
         self.assertEqual(self.request('GET', '/', **{**headers, 'Host': 'other.invalid:20035'})[0], 403)
         self.assertEqual(self.request('POST', '/api/logout', {}, Cookie=cookie, **{**headers, 'X-CSRF-Token': data['csrf']})[0], 200)
+
+
+class ProbeTests(unittest.TestCase):
+    def test_trickling_headers_and_body_stop_at_total_deadline(self):
+        class SlowResponse(BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_GET(self):
+                initial = b'HTTP/1.1 200 OK\r\nX-Slow: ' if self.path == '/headers' else b'HTTP/1.1 200 OK\r\nContent-Length: 32\r\n\r\n'
+                try:
+                    self.wfile.write(initial)
+                    for _ in range(32):
+                        self.wfile.write(b'x')
+                        time.sleep(.04)
+                except OSError:
+                    pass
+
+        server = Server(('127.0.0.1', 0), SlowResponse)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for path in ('/headers', '/body'):
+                with self.subTest(path=path), patch('backend.agent.PROBE_TIMEOUT', .15):
+                    start = time.monotonic()
+                    result = probe('slow', {'host': '127.0.0.1', 'port': server.server_port, 'path': path})
+                    self.assertLess(time.monotonic() - start, .8)
+                    self.assertIsNotNone(result['error'])
+                    self.assertIsNone(result['http_ms'])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 class ResourceTests(unittest.TestCase):

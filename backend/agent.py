@@ -21,6 +21,8 @@ from .engine import Engine, EngineError, resource_usage
 from .http_support import APIError, Handler, Server
 from .store import Store
 
+PROBE_TIMEOUT = 3
+
 
 def host_memory():
     try:
@@ -36,17 +38,34 @@ def host_memory():
 
 def probe(module, settings):
     result = {'module': module, 'http_ms': None, 'tcp_ms': None, 'status': None, 'error': None}
-    connection = None
+    connection, timer = None, None
+    expired = threading.Event()
     try:
         kind = http.client.HTTPSConnection if settings.get('scheme') == 'https' else http.client.HTTPConnection
-        connection = kind(settings['host'], settings['port'], timeout=3)
+        connection = kind(settings['host'], settings['port'], timeout=PROBE_TIMEOUT)
         start = time.monotonic()
         connection.connect()
+        remaining = PROBE_TIMEOUT - (time.monotonic() - start)
+        if remaining <= 0:
+            raise TimeoutError()
+        transport = connection.sock
+        def expire():
+            expired.set()
+            try:
+                transport.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        # A per-read socket timeout does not bound a continuously trickling response.
+        timer = threading.Timer(remaining, expire)
+        timer.daemon = True
+        timer.start()
         result['tcp_ms'] = round((time.monotonic() - start) * 1000, 1)
         connection.request('GET', settings.get('path', '/'), headers={'User-Agent': 'CS-Viewer/1', 'Connection': 'close'})
         response = connection.getresponse()
         result['status'] = response.status
         body = response.read(1024 * 1024 + 1)
+        if expired.is_set() or time.monotonic() - start >= PROBE_TIMEOUT:
+            raise TimeoutError()
         if len(body) > 1024 * 1024:
             raise ValueError('body_limit')
         result['http_ms'] = round((time.monotonic() - start) * 1000, 1)
@@ -55,6 +74,8 @@ def probe(module, settings):
     except (OSError, http.client.HTTPException, ValueError):
         result['error'] = result['error'] or '연결 실패 또는 응답 제한 초과'
     finally:
+        if timer:
+            timer.cancel()
         if connection:
             connection.close()
     return result

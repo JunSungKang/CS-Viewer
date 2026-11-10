@@ -138,9 +138,10 @@ function renderImages(){
       image.digests.length?el('small',{class:'mono'},'참조 digest '+image.digests.join(' · ')):null);
   }));
   const base=entries[0]?.base;
+  const sharedOs=os?.layers.length&&entries.length&&entries.every(({image})=>os.layers.every((layer,i)=>image.layers[i]===layer));
   put('#layer-diagram',entries.length?apps:el('p',{class:'muted'},'계층을 조회하지 못했습니다.'),
     base?el('div',{class:'layer-base'},el('strong',{},base.title+' · 공통 실행환경'),el('p',{},'OS 포함 누적 공유 '+base.layers.length+'개 · 이미지 '+base.id.replace('sha256:','').slice(0,12))):null,
-    os?el('div',{class:'layer-base layer-os'},el('strong',{},'Ubuntu 26.04 · 운영체제 기반'),el('p',{},os.layers.length+'개 파일시스템 계층 · '+os.architecture)):null,
+    sharedOs?el('div',{class:'layer-base layer-os'},el('strong',{},'Ubuntu 26.04 · 운영체제 기반'),el('p',{},os.layers.length+'개 파일시스템 계층 · '+os.architecture)):null,
     ...(data.image_errors||[]).map(message=>el('p',{class:'error-text'},message)));
 }
 function renderMounts(){
