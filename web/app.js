@@ -11,7 +11,7 @@ function el(tag, attrs={}, ...children) {
   for(const child of children.flat(Infinity))if(child!==null && child!==undefined)node.append(child instanceof Node?child:document.createTextNode(String(child)));
   return node;
 }
-function put(selector,...children){$(selector).replaceChildren(...children.flat());}
+function put(selector,...children){$(selector).replaceChildren(...children.flat(Infinity).filter(child=>child!==null&&child!==undefined));}
 function bytes(value){if(value===null||value===undefined)return '확인 불가';return value>=2**30?(value/2**30).toFixed(2)+' GiB':(value/2**20).toFixed(0)+' MiB';}
 function time(value){return value?new Date(value*1000).toLocaleTimeString('ko-KR',{hour12:false}):'수집 대기';}
 function badge(text,kind=''){return el('span',{class:'badge '+kind},text);}
