@@ -16,6 +16,12 @@ function bytes(value){if(value===null||value===undefined)return '확인 불가';
 function time(value){return value?new Date(value*1000).toLocaleTimeString('ko-KR',{hour12:false}):'수집 대기';}
 function badge(text,kind=''){return el('span',{class:'badge '+kind},text);}
 function notice(message,bad=false){$('#notice').hidden=!message;$('#notice').className='notice'+(bad?' bad':'');$('#notice').textContent=message||'';}
+function newRequestId(){
+  const random=crypto.getRandomValues(new Uint8Array(16));
+  random[6]=(random[6]&15)|64;random[8]=(random[8]&63)|128;
+  const hex=Array.from(random,value=>value.toString(16).padStart(2,'0')).join('');
+  return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+}
 function ports(container){return container.ports.length?[...new Set(container.ports.map(p=>`${p.host.includes(':')?'['+p.host+']':p.host}:${p.port} → ${p.container}`))].join(' / '):'호스트 공개 포트 없음';}
 function boardPorts(containers){
   const groups=new Map();
@@ -155,7 +161,7 @@ function renderMounts(){
 }
 function openAction(container,action,title){
   if(stale()||state.busy||!container.control)return;
-  state.pending={id:container.id,action,expected_state:container.state,request_id:crypto.randomUUID(),name:container.display_name};
+  state.pending={id:container.id,action,expected_state:container.state,request_id:newRequestId(),name:container.display_name};
   $('#action-title').textContent=title+' 확인';$('#action-target').textContent=container.display_name+' · '+container.id.slice(0,12);
   $('#action-impact').textContent=container.critical?'공통 PostgreSQL 제어는 DamGoX2와 OnlyPlus에 영향을 줍니다. 관련 writer와 현재 작업을 확인하세요.':'실제 운영 컨테이너에 적용합니다. 계속하려면 '+container.display_name+'을 입력하세요.';
   $('#confirmation').value='';$('#confirmation').placeholder=container.display_name;$('#action-error').textContent='';$('#action-dialog').showModal();
