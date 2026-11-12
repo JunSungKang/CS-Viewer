@@ -1,15 +1,30 @@
 {
   "workspace_root": "/absolute/workspace",
-  "docker_socket": "/Users/operator/.docker/run/docker.sock",
+  "docker_socket": "/Users/local-user/.docker/run/docker.sock",
   "daemon_id": "COPY_FROM_THE_SELECTED_DOCKER_CONTEXT",
   "lock_path": "/absolute/workspace/operations/run/deploy.lock",
   "state_path": "/absolute/workspace/operations/cs-viewer/state/metrics.db",
-  "token_file": "/absolute/workspace/operations/secrets/cs-viewer-agent",
   "port": 20135,
   "interval": 10,
   "services": [
-    {"name": "mailbox-web", "module": "mailbox", "role": "web", "names": ["mailbox-web", "mailbox-webmail-ui"], "control": true}
+    {
+      "name": "mailbox-web",
+      "module": "mailbox",
+      "role": "web",
+      "names": [
+        "mailbox-web",
+        "mailbox-webmail-ui"
+      ]
+    }
   ],
-  "probes": {"mailbox": {"host": "127.0.0.1", "port": 20005, "path": "/"}},
-  "bases": {"Python 3.14": "platform/python314:ubuntu26.04-20261109-r2"}
+  "probes": {
+    "mailbox": {
+      "host": "127.0.0.1",
+      "port": 20005,
+      "path": "/"
+    }
+  },
+  "bases": {
+    "Python 3.14": "platform/python314:ubuntu26.04-20261109-r2"
+  }
 }
