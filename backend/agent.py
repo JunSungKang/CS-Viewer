@@ -4,7 +4,6 @@ import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
-import hmac
 import http.client
 import json
 import os
@@ -143,7 +142,7 @@ class Agent:
             for binding in bindings or []:
                 ports.append({'host': binding.get('HostIp', ''), 'port': binding.get('HostPort', ''), 'container': target})
         result = {'id': raw['Id'], 'name': name, 'display_name': service['name'], 'module': service['module'],
-                  'role': service['role'], 'control': service.get('control') is True, 'critical': service.get('critical') is True,
+                  'role': service['role'], 'critical': service.get('critical') is True,
                   'state': state.get('Status'), 'health': (state.get('Health') or {}).get('Status'),
                   'started_at': state.get('StartedAt'), 'restart_count': raw.get('RestartCount', 0), 'ports': ports,
                   'oom_killed': bool(state.get('OOMKilled')), 'last_exit_at': state.get('FinishedAt'),
@@ -220,7 +219,7 @@ class Agent:
         fingerprint = hashlib.sha256(json.dumps({k: body.get(k) for k in ('id', 'action', 'expected_state', 'confirmation')}, sort_keys=True).encode()).hexdigest()
         with deploy_lock(self.config['lock_path']):
             try:
-                previous = self.store.begin(request_id, fingerprint, 'operator', target, action)
+                previous = self.store.begin(request_id, fingerprint, 'dashboard', target, action)
             except ValueError as exc:
                 raise APIError(409, str(exc)) from exc
             if previous:
@@ -230,8 +229,10 @@ class Agent:
                 self.verify_daemon()
                 raw = self.engine.inspect(target)
                 service = self.aliases.get(raw['Name'].lstrip('/'))
-                if raw['Id'] != target or not service or service.get('control') is not True:
-                    raise APIError(403, '제어 허용 목록의 컨테이너가 아닙니다.')
+                if raw['Id'] != target:
+                    raise APIError(409, '컨테이너 ID가 변경되었습니다.')
+                if not service:
+                    raise APIError(404, '관리 인벤토리에 없는 컨테이너입니다.')
                 if body.get('confirmation') != service['name']:
                     raise APIError(400, '확인 이름이 일치하지 않습니다.')
                 state = raw['State']['Status']
@@ -264,12 +265,9 @@ class Agent:
         return {k: v for k, v in result.items() if k != 'fingerprint'}
 
 
-def make_handler(agent, token):
+def make_handler(agent):
     class AgentHandler(Handler):
         def route(self):
-            authorization = self.headers.get('Authorization', '')
-            if not hmac.compare_digest(authorization, 'Bearer ' + token):
-                raise APIError(401, '에이전트 인증 실패')
             url = urlsplit(self.path)
             if self.command == 'GET' and url.path == '/state' and not url.query:
                 self.send(200, agent.state())
@@ -293,17 +291,17 @@ def make_handler(agent, token):
 def load_config(path):
     config = json.loads(Path(path).read_text())
     root = Path(config['workspace_root']).resolve()
-    for key in ('lock_path', 'state_path', 'token_file'):
+    for key in ('lock_path', 'state_path'):
         destination = Path(config[key]).resolve()
         if not destination.is_relative_to(root):
             raise ValueError(key + ' must stay in the workspace')
     for service in config['services']:
         if not all(isinstance(service.get(key), str) and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', service[key]) for key in ('module', 'role', 'name')):
             raise ValueError('Invalid service metadata')
-        if any(key in service and type(service[key]) is not bool for key in ('control', 'critical')):
-            raise ValueError('Control and critical flags must be JSON booleans')
+        if 'critical' in service and type(service['critical']) is not bool:
+            raise ValueError('Critical flag must be a JSON boolean')
         if not isinstance(service.get('names'), list) or not service['names'] or any(not isinstance(name, str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', name) for name in service['names']):
-            raise ValueError('Invalid container name allowlist')
+            raise ValueError('Invalid container inventory names')
     return config
 
 
@@ -312,9 +310,6 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     config = load_config(args.config)
-    token = Path(config['token_file']).read_text().strip()
-    if len(token) < 32:
-        raise ValueError('Agent token is too short')
     Path(config['state_path']).parent.mkdir(parents=True, exist_ok=True)
     agent = Agent(config)
     def loop():
@@ -322,7 +317,7 @@ def main():
             agent.collect()
             time.sleep(max(5, config.get('interval', 10)))
     threading.Thread(target=loop, daemon=True).start()
-    server = Server(('127.0.0.1', config.get('port', 20135)), make_handler(agent, token))
+    server = Server(('127.0.0.1', config.get('port', 20135)), make_handler(agent))
     print(json.dumps({'event': 'agent.started', 'port': server.server_port}), flush=True)
     server.serve_forever()
 

@@ -1,6 +1,6 @@
 'use strict';
 const $ = selector => document.querySelector(selector);
-const state = {data:null, csrf:null, page:'board', module:null, selected:null, mount:null, base:null, pending:null, busy:false, timer:null};
+const state = {data:null, page:'board', module:null, selected:null, mount:null, base:null, pending:null, busy:false, timer:null};
 function el(tag, attrs={}, ...children) {
   const node=document.createElement(tag);
   for (const [key,value] of Object.entries(attrs)) {
@@ -37,20 +37,18 @@ function stale(){return !state.data?.collected_at || Boolean(state.data.error) |
 async function api(path,body,timeout=8000){
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),timeout);
   try{
-    const response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'same-origin',cache:'no-store',signal:controller.signal,
-      headers:body===undefined?{}:{'Content-Type':'application/json','X-CSRF-Token':state.csrf||''},body:body===undefined?undefined:JSON.stringify(body)});
+    const response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'omit',cache:'no-store',signal:controller.signal,
+      headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
     const result=await response.json();
     if(!response.ok){const error=new Error(result.error||'요청 실패');error.status=response.status;throw error;}
     return result;
   }finally{clearTimeout(timer);}
 }
-function signedOut(){clearTimeout(state.timer);state.csrf=null;state.data=null;$('#login').hidden=false;$('#console').hidden=true;$('#action-dialog').close();}
-function signedIn(session){state.csrf=session.csrf;$('#login').hidden=true;$('#console').hidden=false;$('#login-form').elements.password.value='';poll();}
 async function poll(){
   clearTimeout(state.timer);
   try{state.data=await api('/api/state');render();}
-  catch(error){if(error.status===401){signedOut();return;}notice('수집 연결 실패 · 표시된 이전 데이터는 최신 상태가 아닙니다.',true);if(state.data){state.data.error='웹/API 연결 실패';renderContainers();}}
-  if(state.csrf)state.timer=setTimeout(poll,10000);
+  catch(error){notice('수집 연결 실패 · 표시된 이전 데이터는 최신 상태가 아닙니다.',true);if(state.data){state.data.error='웹/API 연결 실패';renderContainers();}}
+  state.timer=setTimeout(poll,10000);
 }
 function page(name){state.page=name;document.querySelectorAll('[data-view]').forEach(n=>n.hidden=n.dataset.view!==name);document.querySelectorAll('[data-page]').forEach(n=>{if(n.dataset.page===name)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});}
 function render(){
@@ -91,7 +89,7 @@ function renderBoard(){
 function options(select,values,current){const keys=values.map(v=>v[0]);if(!keys.includes(current))current=keys[0]||null;const signature=JSON.stringify(values);if(select.dataset.options!==signature){select.replaceChildren(...values.map(([key,text])=>el('option',{value:key},text)));select.dataset.options=signature;}if(current!==null)select.value=current;return current;}
 function renderContainers(){
   const items=state.data?.containers||[],modules=[...new Set(items.map(c=>c.module))].sort((a,b)=>a.localeCompare(b));
-  if(!state.module)state.module=modules.find(module=>items.some(c=>c.module===module&&c.control))||modules[0];
+  if(!state.module)state.module=modules[0];
   state.module=options($('#module-select'),modules.map(m=>[m,m+' ('+items.filter(c=>c.module===m).length+')']),state.module);
   const selected=items.filter(c=>c.module===state.module);
   if(!selected.some(c=>c.id===state.selected))state.selected=selected[0]?.id||null;
@@ -109,9 +107,8 @@ function renderContainers(){
     const actions=el('div',{class:'control-actions'});
     for(const [action,title] of [['start','시작'],['stop','중지'],['restart','재시작']]){
       const button=el('button',{onclick:()=>openAction(container,action,title)},title);
-      button.disabled=stale()||state.busy||!container.control||(action==='start'?!['exited','created'].includes(container.state):container.state!=='running');actions.append(button);
+      button.disabled=stale()||state.busy||(action==='start'?!['exited','created'].includes(container.state):container.state!=='running');actions.append(button);
     }
-    if(!container.control)details.append(el('small',{},'조회 전용 · 자기 자신과 운영 제외 대상은 제어하지 않습니다.'));
     put('#container-detail',details,actions);
   }
   const statusNames={succeeded:'검증 완료',unknown:'상태 확인 필요',failed:'실패',rejected:'거절',pending:'진행 중'};
@@ -161,14 +158,12 @@ function renderMounts(){
     'DB와 일반 파일을 구분하고 관련 writer 및 호스트 작업까지 확인합니다. 실행 중인 DB 파일의 단순 복사를 정상 백업으로 취급하지 않습니다.';
 }
 function openAction(container,action,title){
-  if(stale()||state.busy||!container.control)return;
+  if(stale()||state.busy)return;
   state.pending={id:container.id,action,expected_state:container.state,request_id:newRequestId(),name:container.display_name};
   $('#action-title').textContent=title+' 확인';$('#action-target').textContent=container.display_name+' · '+container.id.slice(0,12);
-  $('#action-impact').textContent=container.critical?'공통 PostgreSQL 제어는 DamGoX2와 OnlyPlus에 영향을 줍니다. 관련 writer와 현재 작업을 확인하세요.':'실제 운영 컨테이너에 적용합니다. 계속하려면 '+container.display_name+'을 입력하세요.';
+  $('#action-impact').textContent=container.critical?'공통 인프라 제어는 여러 서비스에 영향을 줍니다. 관련 서비스와 현재 작업을 확인하세요.':'실제 운영 컨테이너에 적용합니다. 계속하려면 '+container.display_name+'을 입력하세요.';
   $('#confirmation').value='';$('#confirmation').placeholder=container.display_name;$('#action-error').textContent='';$('#action-dialog').showModal();
 }
-$('#login-form').addEventListener('submit',async event=>{event.preventDefault();const form=event.currentTarget;form.querySelector('button').disabled=true;$('#login-error').textContent='';try{signedIn(await api('/api/login',{username:form.elements.username.value,password:form.elements.password.value}));}catch(error){$('#login-error').textContent=error.message;}finally{form.querySelector('button').disabled=false;}});
-$('#logout').addEventListener('click',async()=>{try{await api('/api/logout',{});}catch{}signedOut();});
 document.querySelectorAll('[data-page]').forEach(button=>button.addEventListener('click',()=>page(button.dataset.page)));
 $('#module-select').addEventListener('change',event=>{state.module=event.target.value;state.selected=null;renderContainers();});
 $('#mount-select').addEventListener('change',event=>{state.mount=event.target.value;renderMounts();});
@@ -183,4 +178,4 @@ $('#action-form').addEventListener('submit',async event=>{
   catch(error){$('#action-error').textContent=error.name==='AbortError'?'응답 시간이 초과되었습니다. 재요청 전에 현재 상태와 작업 이력을 확인하세요.':error.message;}
   finally{state.busy=false;$('#action-submit').disabled=false;$('#action-cancel').disabled=false;await poll();}
 });
-api('/api/session').then(signedIn).catch(signedOut);
+poll();

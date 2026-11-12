@@ -58,7 +58,7 @@ class AgentTests(unittest.TestCase):
         self.engine = FakeEngine()
         self.store = Store(self.path / 'state.db')
         self.config = {'daemon_id': 'expected-daemon', 'lock_path': str(self.path / 'deploy.lock'),
-                       'services': [{'name': 'mailbox-web', 'module': 'mailbox', 'role': 'web', 'names': ['mailbox-web'], 'control': True}], 'bases': {}, 'probes': {}}
+                       'services': [{'name': 'mailbox-web', 'module': 'mailbox', 'role': 'web', 'names': ['mailbox-web']}], 'bases': {}, 'probes': {}}
         self.agent = Agent(self.config, self.engine, self.store)
 
     def tearDown(self):
@@ -103,28 +103,30 @@ class AgentTests(unittest.TestCase):
 
     def test_identity_change_is_rejected(self):
         self.engine.raw['Id'] = 'c' * 64
-        self.rejected(self.request(), 403)
+        self.rejected(self.request(), 409)
 
     def test_unknown_container_is_rejected(self):
         self.engine.raw['Name'] = '/crm'
-        self.rejected(self.request(), 403)
+        self.rejected(self.request(), 404)
 
-    def test_read_only_service_is_rejected(self):
-        self.config['services'][0]['control'] = False
-        self.rejected(self.request(), 403)
-
-    def test_string_permission_is_not_truthy_and_config_cannot_escape_workspace(self):
-        self.config['services'][0]['control'] = 'false'
-        self.rejected(self.request(), 403)
-        config = {**self.config, 'workspace_root': str(self.path), 'state_path': str(self.path / 'state.db'), 'token_file': str(self.path / 'token')}
-        file = self.path / 'config.json';file.write_text(json.dumps(config))
-        with self.assertRaises(ValueError):
-            load_config(file)
-        config['services'][0]['control'] = False
-        config['lock_path'] = '/outside-authorized-workspace/deploy.lock'
+    def test_config_without_credentials_and_workspace_boundary(self):
+        config = {**self.config, 'workspace_root': str(self.path), 'state_path': str(self.path / 'state.db')}
+        file = self.path / 'config.json'
+        file.write_text(json.dumps(config))
+        self.assertEqual(load_config(file)['services'][0]['name'], 'mailbox-web')
+        config['services'][0]['critical'] = 'false'
         file.write_text(json.dumps(config))
         with self.assertRaises(ValueError):
             load_config(file)
+        config['services'][0]['critical'] = False
+        config['lock_path'] = '/outside-workspace/deploy.lock'
+        file.write_text(json.dumps(config))
+        with self.assertRaises(ValueError):
+            load_config(file)
+
+    def test_all_inventory_services_can_be_controlled(self):
+        self.assertNotIn('control', self.config['services'][0])
+        self.assertEqual(self.agent.action(self.request())['status'], 'succeeded')
 
     def test_stale_state_and_wrong_confirmation(self):
         self.rejected(self.request(expected_state='exited'), 409)
@@ -158,7 +160,7 @@ class AgentTests(unittest.TestCase):
         self.assertIsNotNone(self.agent.state()['error'])
 
     def test_pending_audit_survives_restart_as_unknown(self):
-        self.store.begin('request', 'fingerprint', 'operator', CONTAINER_ID, 'restart')
+        self.store.begin('request', 'fingerprint', 'dashboard', CONTAINER_ID, 'restart')
         another = Store(self.path / 'state.db')
         self.assertEqual(another.audit()[0]['status'], 'unknown')
         another.db.close()
@@ -166,7 +168,7 @@ class AgentTests(unittest.TestCase):
 
 class WebTests(unittest.TestCase):
     def setUp(self):
-        self.app = Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', ['http://127.0.0.1:20035'])
+        self.app = Application('http://127.0.0.1:20135')
         self.server = Server(('127.0.0.1', 0), make_handler(self.app))
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -178,84 +180,64 @@ class WebTests(unittest.TestCase):
 
     def request(self, method, path, body=None, **headers):
         connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=3)
-        defaults = {'Host': '127.0.0.1:20035', 'Content-Type': 'application/json', 'Origin': 'http://127.0.0.1:20035', **headers}
-        connection.request(method, path, json.dumps(body) if body is not None else None, defaults)
+        connection.request(method, path, json.dumps(body) if body is not None else None,
+                           {'Content-Type': 'application/json', **headers})
         response = connection.getresponse()
         data, response_headers = response.read(), dict(response.getheaders())
         status = response.status
         connection.close()
         return status, json.loads(data) if 'application/json' in response_headers.get('Content-Type', '') else data, response_headers
 
-    def login(self):
-        status, data, headers = self.request('POST', '/api/login', {'username': 'operator', 'password': 'test-password-for-local-unit-tests'})
-        self.assertEqual(status, 200)
-        self.assertIn('HttpOnly', headers['Set-Cookie'])
-        self.assertIn('SameSite=Strict', headers['Set-Cookie'])
-        return data['csrf'], headers['Set-Cookie'].split(';')[0]
+    def test_state_and_action_work_without_browser_credentials(self):
+        with patch.object(self.app, 'proxy', return_value={'containers': []}) as proxy:
+            self.assertEqual(self.request('GET', '/api/state')[1], {'containers': []})
+            proxy.assert_called_once_with('GET', '/state')
+        body = {'action': 'restart', 'id': CONTAINER_ID}
+        with patch.object(self.app, 'proxy', return_value={'status': 'succeeded'}) as proxy:
+            self.assertEqual(self.request('POST', '/api/action', body)[0], 200)
+            proxy.assert_called_once_with('POST', '/action', body)
 
-    def test_authentication_csrf_and_origin(self):
-        self.assertEqual(self.request('GET', '/api/state')[0], 401)
-        csrf, cookie = self.login()
-        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie)[0], 403)
-        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **{'X-CSRF-Token': csrf, 'Origin': 'https://other.invalid'})[0], 403)
-        self.assertEqual(self.request('POST', '/api/logout', {}, Cookie=cookie, **{'X-CSRF-Token': csrf})[0], 200)
-        self.assertEqual(self.request('GET', '/api/session', Cookie=cookie)[0], 401)
-
-    def test_no_arbitrary_proxy_or_static_traversal(self):
-        _, cookie = self.login()
-        self.assertEqual(self.request('GET', '/api/containers/create', Cookie=cookie)[0], 404)
-        self.assertEqual(self.request('GET', '/../../.git/config')[0], 404)
-        self.assertEqual(self.request('GET', '/api/state', Host='evil.invalid')[0], 403)
-
-    def test_login_rate_limit_and_invalid_json_shape(self):
-        for _ in range(5):
-            self.assertEqual(self.request('POST', '/api/login', {'username': 'operator', 'password': 'wrong'})[0], 401)
-        self.assertEqual(self.request('POST', '/api/login', {'username': 'operator', 'password': 'wrong'})[0], 429)
-        self.assertEqual(self.request('POST', '/api/login', [1, 2])[0], 400)
-
-    def test_valid_session_and_static_csp(self):
-        csrf, cookie = self.login()
-        self.assertEqual(self.request('GET', '/api/session', Cookie=cookie)[1]['csrf'], csrf)
+    def test_dashboard_is_visible_and_keeps_static_csp(self):
         status, body, headers = self.request('GET', '/')
         self.assertEqual(status, 200)
-        self.assertIn(b'CS-Viewer', body)
+        self.assertIn(b'<div id="console">', body)
+        self.assertNotIn(b'type="password"', body)
+        self.assertNotIn('Set-Cookie', headers)
         self.assertIn("frame-ancestors 'none'", headers['Content-Security-Policy'])
 
-    def test_expired_session_body_limit_and_media_type(self):
-        _, cookie = self.login()
-        self.app.sessions[cookie.split('=', 1)[1]]['expires'] = 0
-        self.assertEqual(self.request('GET', '/api/session', Cookie=cookie)[0], 401)
-        self.assertEqual(self.request('POST', '/api/login', {'password': 'x' * 9000})[0], 413)
-        self.assertEqual(self.request('POST', '/api/login', {}, **{'Content-Type': 'text/plain'})[0], 415)
-
-    def test_public_origin_requires_tls_and_mixed_origins_keep_secure_cookie(self):
+    def test_no_arbitrary_proxy_or_static_traversal(self):
+        for path in ('/api/containers/create', '/../../.git/config', '/api/state?extra=1'):
+            self.assertEqual(self.request('GET', path)[0], 404)
+        with self.assertRaises(APIError):
+            self.app.proxy('POST', '/containers/create', {})
         with self.assertRaises(ValueError):
-            Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', ['http://public.invalid'])
-        self.app.origins.add('https://control.example.invalid')
-        self.app.hosts.add('control.example.invalid')
-        status, _, headers = self.request('POST', '/api/login', {'username': 'operator', 'password': 'test-password-for-local-unit-tests'}, Host='control.example.invalid', Origin='https://control.example.invalid')
-        self.assertEqual(status, 200)
-        self.assertIn('; Secure', headers['Set-Cookie'])
+            Application('http://external.invalid:20135')
 
-    def test_remote_http_opt_in_preserves_auth_host_origin_and_csrf(self):
-        origin = 'http://control.example.invalid:20035'
-        for disabled in (False, '1'):
-            with self.assertRaises(ValueError):
-                Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', [origin], allow_remote_http=disabled)
-        self.app = Application('test-password-for-local-unit-tests', 'a' * 64, 'http://127.0.0.1:20135', [origin], allow_remote_http=True)
-        self.server.RequestHandlerClass = make_handler(self.app)
-        headers = {'Host': 'control.example.invalid:20035', 'Origin': origin}
-        self.assertEqual(self.request('GET', '/api/state', **headers)[0], 401)
-        status, data, response = self.request('POST', '/api/login', {'username': 'operator', 'password': 'test-password-for-local-unit-tests'}, **headers)
-        self.assertEqual(status, 200)
-        cookie = response['Set-Cookie'].split(';')[0]
-        self.assertNotIn('; Secure', response['Set-Cookie'])
-        self.assertIn('; HttpOnly; SameSite=Strict;', response['Set-Cookie'])
-        self.assertEqual(self.request('GET', '/api/session', Cookie=cookie, **headers)[0], 200)
-        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **headers)[0], 403)
-        self.assertEqual(self.request('POST', '/api/action', {}, Cookie=cookie, **{**headers, 'Origin': 'http://other.invalid:20035', 'X-CSRF-Token': data['csrf']})[0], 403)
-        self.assertEqual(self.request('GET', '/', **{**headers, 'Host': 'other.invalid:20035'})[0], 403)
-        self.assertEqual(self.request('POST', '/api/logout', {}, Cookie=cookie, **{**headers, 'X-CSRF-Token': data['csrf']})[0], 200)
+    def test_invalid_json_body_limit_and_media_type(self):
+        self.assertEqual(self.request('POST', '/api/action', [1, 2])[0], 400)
+        self.assertEqual(self.request('POST', '/api/action', {'data': 'x' * 9000})[0], 413)
+        self.assertEqual(self.request('POST', '/api/action', {}, **{'Content-Type': 'text/plain'})[0], 415)
+
+    def test_agent_readiness_and_actions_are_reachable_directly(self):
+        agent = unittest.mock.Mock()
+        agent.state.return_value = {'collected_at': time.time(), 'error': None, 'containers': []}
+        agent.action.return_value = {'status': 'succeeded'}
+        server = Server(('127.0.0.1', 0), agent_handler(agent))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.app.agent_url = Application('http://127.0.0.1:' + str(server.server_port)).agent_url
+        try:
+            self.assertEqual(self.request('GET', '/healthz')[1], {'ready': True})
+            self.assertEqual(self.request('GET', '/api/state')[1]['containers'], [])
+            body = {'action': 'stop', 'id': CONTAINER_ID}
+            self.assertEqual(self.request('POST', '/api/action', body)[1]['status'], 'succeeded')
+            agent.action.assert_called_once_with(body)
+            agent.state.return_value['collected_at'] = time.time() - 120
+            self.assertEqual(self.request('GET', '/healthz')[0], 503)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
 
 
 class ProbeTests(unittest.TestCase):

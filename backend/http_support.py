@@ -42,7 +42,7 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(45)
 
     def log_message(self, *_args):
-        pass  # Never log cookies, authorization or request bodies.
+        pass  # Keep request headers and bodies out of operational logs.
 
     def send(self, status, value, headers=None, content_type='application/json; charset=utf-8'):
         body = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode()
