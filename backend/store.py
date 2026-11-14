@@ -32,6 +32,7 @@ class Store:
         with self.flush_lock:
             try:
                 actual=retention_status(self.client)
+                with self.lock:self.storage['retention_years']=actual
                 if any(v is None or v<3 for v in actual.values()):raise StorageError('Invalid retention policy')
                 for _ in range(8):
                     batch=self.spool.prepare()

@@ -30,6 +30,6 @@ python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/app.j
 
 outbox는 기본 1GiB의 제한된 파일 대기열이다. 기록 확인 전 삭제하지 않는다. 전송은 at-least-once이며 불확정 응답 재시도 시 중복 가능성이 있다. 고정 batch token과 레코드 ID를 사용하며 중복 제거 창은 유한하다. 원문 조회는 record_id/chunk로 식별 가능한 중복을 접는다. 운영 데이터의 정확한 분석 집계에서는 이 특성을 고려한다.
 
-Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 기록을 backfill하지 않는다. 회전·삭제된 원본과 파일에만 남긴 앱 로그는 복원하지 못한다. TTY는 stdout/stderr가 이미 합쳐진 tty 스트림이다. 수집기를 장기간 중단하면 Docker 보관 기간을 넘는 공백이 생길 수 있으므로 오류와 대기열을 확인한다.
+Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 기록을 backfill하지 않는다. 회전·삭제된 원본과 파일에만 남긴 앱 로그는 복원하지 못한다. TTY는 stdout/stderr가 이미 합쳐진 tty 스트림이다. TTY의 body는 Docker가 붙인 시각을 포함한 구간 원문이며, 조각은 chunk 순서로 결합한다. event_time은 해당 구간 첫 Docker 시각이고 본문 속 개별 시각도 보존한다. 완료한 구간만 offset을 전진하여 조용한 스트림의 과거를 반복 조회하지 않는다. 수집기를 장기간 중단하면 Docker 보관 기간을 넘는 공백이 생길 수 있으므로 오류와 대기열을 확인한다.
 
 단일 host writer와 공유 flock이 제어 직렬화를 담당한다. 재시작 전 pending은 unknown으로 표시하고 재실행하지 않는다. DB 장애 동안 최신 수집은 계속하지만 제어 intent를 저장하지 못하면 제어는 거부한다. 단일 디스크 보관은 외부 백업·복제 보장을 대신하지 않는다.

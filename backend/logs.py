@@ -34,21 +34,11 @@ def read_exact(response, size):
 
 def frames(response, tty=False):
     if tty:
-        # A TTY has no multiplex header. Docker prefixes even partial long messages.
-        marker=re.compile(rb'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{9}Z ')
-        buffer=b''
+        # Docker TTY output has no frame boundaries. Preserve its timestamped bytes.
         while True:
-            piece=response.read1(65536)
-            buffer+=piece
-            matches=list(marker.finditer(buffer))
-            if matches and matches[0].start()!=0:raise ValueError('TTY timestamp prefix missing')
-            if len(matches)>1:
-                for a,b in zip(matches,matches[1:]):yield 'tty',buffer[a.start():b.start()]
-                buffer=buffer[matches[-1].start():]
-            if len(buffer)>16*1024*1024:raise ValueError('TTY frame limit exceeded')
-            if not piece:
-                if buffer:yield 'tty',buffer
-                return
+            piece=response.read(256*1024)
+            if not piece:return
+            yield 'tty',piece
     while True:
         first=response.read(1)
         if not first:return
@@ -86,37 +76,45 @@ class Collector:
         if not re.fullmatch('[0-9a-f]{64}',cid):raise ValueError('Invalid container identity')
         path=self.path/(cid+'.json')
         cursor=json.loads(path.read_text()) if path.exists() else {}
-        seen={};last={k:dict(v) for k,v in cursor.items()};pending=[]
+        previous=cursor.get('window',{}).get('until')
+        end=int(time.time())-1
+        if previous is not None and end<=previous:return
+        since_ns=previous*1000000000+1 if previous is not None else self.cutover
+        since='%d.%09d'%divmod(since_ns,1000000000)
+        params=urlencode({'stdout':1,'stderr':1,'timestamps':1,'since':since,'until':end})
+        raw=self.engine.inspect(cid)
+        if raw['Id']!=cid or raw['Name'].lstrip('/')!=name:raise EngineError('Container changed')
+        tty=raw.get('Config',{}).get('Tty',False)
+        conn=UnixConnection(self.engine.path,5)
+        pending=[];counts={};first_ns=None;tty_chunk=0
         def persist():
             if pending:
                 self.store.enqueue('container_logs',pending)
-                atomic_json(path,last)
                 pending.clear()
-        start=min((v['ns'] for v in cursor.values()),default=self.cutover)
-        params=urlencode({'stdout':1,'stderr':1,'timestamps':1,'since':start//1000000000,'until':int(time.time())-1})
-        raw=self.engine.inspect(cid)
-        if raw['Id']!=cid or raw['Name'].lstrip('/')!=name:raise EngineError('Container changed')
-        conn=UnixConnection(self.engine.path,5)
         try:
             conn.request('GET',self.engine.prefix+'/containers/'+cid+'/logs?'+params)
             response=conn.getresponse()
             if response.status!=200:raise EngineError('Docker logging driver cannot be read')
-            for stream,payload in frames(response,raw.get('Config',{}).get('Tty',False)):
-                ns,body=decode_record(payload)
-                key=(stream,ns);seen[key]=seen.get(key,0)+1;occurrence=seen[key]
-                old=cursor.get(stream,{'ns':self.cutover,'count':0})
-                if ns<old['ns'] or ns==old['ns'] and occurrence<=old['count']:continue
-                rid=hashlib.sha256(cid.encode()+stream.encode()+str(ns).encode()+str(occurrence).encode()+body).hexdigest()[:32]
-                rows=[];batch=str(uuid.uuid4())
+            for stream,payload in frames(response,tty):
+                if tty:
+                    if first_ns is None:first_ns=decode_record(payload)[0]
+                    ns=first_ns;body=payload;occurrence=1
+                    rid=hashlib.sha256((cid+':'+since+':'+str(end)).encode()).hexdigest()[:32]
+                else:
+                    ns,body=decode_record(payload)
+                    counts[stream]=counts.get(stream,0)+1;occurrence=counts[stream]
+                    rid=hashlib.sha256(cid.encode()+stream.encode()+str(ns).encode()+str(occurrence).encode()+body).hexdigest()[:32]
+                batch=str(uuid.uuid4())
                 for chunk,offset in enumerate(range(0,max(1,len(body)),256*1024)):
                     piece=body[offset:offset+256*1024]
                     try:text=piece.decode('utf-8');encoding='utf8'
                     except UnicodeError:text=base64.b64encode(piece).decode();encoding='base64'
-                    rows.append({'event_time':timestamp(ns),'received_at':int(time.time()),'batch_id':batch,
+                    pending.append({'event_time':timestamp(ns),'received_at':int(time.time()),'batch_id':batch,
                         'module':service['module'],'role':service['role'],'container_name':name,'container_id':cid,
-                        'stream':stream,'record_id':rid,'occurrence':occurrence,'chunk':chunk,'body':text,'encoding':encoding})
-                pending.extend(rows)
-                last[stream]={'ns':ns,'count':occurrence}
+                        'stream':stream,'record_id':rid,'occurrence':occurrence,'chunk':tty_chunk if tty else chunk,'body':text,'encoding':encoding})
+                    if tty:tty_chunk+=1
                 if len(pending)>=200:persist()
             persist()
+            # Advance even on empty windows; never advance before the entire response is durable.
+            atomic_json(path,{'window':{'until':end}})
         finally:conn.close()

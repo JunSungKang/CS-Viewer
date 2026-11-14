@@ -84,7 +84,7 @@ function renderBoard(){
       el('div',{class:'resource'},el('span',{},'CPU ',el('strong',{},s.cpu_percent===null?'—':s.cpu_percent+'%')),el('span',{},'MEM ',el('strong',{},bytes(s.memory_bytes))),el('span',{},'실행 ',el('strong',{},s.running+' / '+s.total))),
       s.restarts?el('p',{class:'footnote'},'컨테이너 자동 재시작 누적 '+s.restarts+'회'+(s.oom_history?' · 메모리 부족 종료 이력':'')):null);
   }):el('p',{class:'empty'},'첫 측정을 수집하고 있습니다.'));
-  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 보존 ${d.storage?.retention_years?.service_samples||3}년 이상 · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
+  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 보존 ${d.storage?.retention_years?.service_samples?d.storage.retention_years.service_samples+'년 이상':'확인 중'} · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
 }
 function options(select,values,current){const keys=values.map(v=>v[0]);if(!keys.includes(current))current=keys[0]||null;const signature=JSON.stringify(values);if(select.dataset.options!==signature){select.replaceChildren(...values.map(([key,text])=>el('option',{value:key},text)));select.dataset.options=signature;}if(current!==null)select.value=current;return current;}
 function renderContainers(){

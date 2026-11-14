@@ -26,7 +26,7 @@ def main():
         def date(value,default):
             result=datetime.datetime.fromisoformat(value.replace('Z','+00:00')) if value else default
             if result.tzinfo is None:parser.error('Timezone required')
-            return result
+            return result.astimezone(datetime.timezone.utc)
         end=date(args.end,now);start=date(args.start,end-datetime.timedelta(minutes=15))
         if not start<end or end-start>datetime.timedelta(days=31):parser.error('Range must be positive and at most 31 days')
         result=client.rows(f'''SELECT event_time,module,container_name,stream,record_id,chunk,body,encoding
