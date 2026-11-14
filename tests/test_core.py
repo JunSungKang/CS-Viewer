@@ -49,6 +49,24 @@ class FakeEngine:
         self.raw['State']['StartedAt'] = str(len(self.actions))
 
 
+class MemoryClient:
+    database = 'test'
+    def __init__(self): self.events = []; self.writes = []
+    def insert(self, table, rows, token):
+        self.writes.append((table, rows, token))
+        if table == 'action_events': self.events.extend(copy.deepcopy(rows))
+    def query(self, *args, **kwargs): return b'TTL received_at + toIntervalYear(3)'
+    def rows(self, sql, parameters=None, settings=None):
+        if '.service_samples' in sql:return []
+        if 'WHERE request_id=' in sql:
+            rows = [r for r in self.events if r['request_id'] == parameters['id']]
+            return copy.deepcopy(sorted(rows, key=lambda r:r['event_sequence'], reverse=True)[:1])
+        latest = {}
+        for row in self.events:
+            if row['event_sequence'] >= latest.get(row['request_id'], {}).get('event_sequence', -1): latest[row['request_id']] = row
+        return [{**{k:v for k,v in r.items() if k not in ('fingerprint','event_sequence','received_at','started_at')}, 'ts':r['started_at']} for r in sorted(latest.values(),key=lambda r:r['started_at'],reverse=True)[:50]]
+
+
 class AgentTests(unittest.TestCase):
     def setUp(self):
         root = Path(__file__).resolve().parents[1] / '.runtime/tests'
@@ -56,13 +74,13 @@ class AgentTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(dir=root)
         self.path = Path(self.temp.name)
         self.engine = FakeEngine()
-        self.store = Store(self.path / 'state.db')
+        self.client = MemoryClient()
+        self.store = Store({}, self.path / 'spool', client=self.client)
         self.config = {'daemon_id': 'expected-daemon', 'lock_path': str(self.path / 'deploy.lock'),
                        'services': [{'name': 'mailbox-web', 'module': 'mailbox', 'role': 'web', 'names': ['mailbox-web']}], 'bases': {}, 'probes': {}}
         self.agent = Agent(self.config, self.engine, self.store)
 
     def tearDown(self):
-        self.store.db.close()
         self.temp.cleanup()
 
     def request(self, action='restart', **changes):
@@ -110,7 +128,9 @@ class AgentTests(unittest.TestCase):
         self.rejected(self.request(), 404)
 
     def test_config_without_credentials_and_workspace_boundary(self):
-        config = {**self.config, 'workspace_root': str(self.path), 'state_path': str(self.path / 'state.db')}
+        credentials = self.path / 'clickhouse.json'
+        credentials.write_text(json.dumps({'url':'http://127.0.0.1:20140','user':'test','password':'test'}))
+        config = {**self.config, 'workspace_root': str(self.path), 'spool_path': str(self.path / 'spool'), 'log_state_path':str(self.path / 'offsets'), 'clickhouse_config':str(credentials)}
         file = self.path / 'config.json'
         file.write_text(json.dumps(config))
         self.assertEqual(load_config(file)['services'][0]['name'], 'mailbox-web')
@@ -161,9 +181,9 @@ class AgentTests(unittest.TestCase):
 
     def test_pending_audit_survives_restart_as_unknown(self):
         self.store.begin('request', 'fingerprint', 'dashboard', CONTAINER_ID, 'restart')
-        another = Store(self.path / 'state.db')
+        another = Store({}, self.path / 'other-spool', client=self.client)
+        another.refresh_audit()
         self.assertEqual(another.audit()[0]['status'], 'unknown')
-        another.db.close()
 
 
 class WebTests(unittest.TestCase):

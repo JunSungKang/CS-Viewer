@@ -9,6 +9,18 @@ jobs:
   backend:
     name: Tests / backend
     runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.8.36.3@sha256:d426d2f612e1e189c90f9a3f8dcd85a03c6851273833817a296bb327e63aa7a7
+        env:
+          CLICKHOUSE_PASSWORD: integration-only
+        ports: ['18123:8123']
+        options: >-
+          --memory=1536m --cpus=2
+          --health-cmd="wget --quiet --output-document=- http://127.0.0.1:8123/ping"
+          --health-interval=5s --health-timeout=3s --health-retries=12
+    env:
+      CS_TEST_CLICKHOUSE_URL: http://127.0.0.1:18123
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
