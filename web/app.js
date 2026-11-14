@@ -1,6 +1,6 @@
 'use strict';
 const $ = selector => document.querySelector(selector);
-const state = {data:null, page:'board', module:null, selected:null, mount:null, base:null, pending:null, busy:false, timer:null};
+const state = {data:null, module:null, selected:null, mount:null, base:null, pending:null, busy:false, timer:null};
 function el(tag, attrs={}, ...children) {
   const node=document.createElement(tag);
   for (const [key,value] of Object.entries(attrs)) {
@@ -40,17 +40,17 @@ async function api(path,body,timeout=8000){
     const response=await fetch(path,{method:body===undefined?'GET':'POST',credentials:'omit',cache:'no-store',signal:controller.signal,
       headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
     const result=await response.json();
-    if(!response.ok){const error=new Error(result.error||'요청 실패');error.status=response.status;throw error;}
+    if(!response.ok)throw new Error(result.error||'요청 실패');
     return result;
   }finally{clearTimeout(timer);}
 }
 async function poll(){
   clearTimeout(state.timer);
   try{state.data=await api('/api/state');render();}
-  catch(error){notice('수집 연결 실패 · 표시된 이전 데이터는 최신 상태가 아닙니다.',true);if(state.data){state.data.error='웹/API 연결 실패';renderContainers();}}
+  catch{notice('수집 연결 실패 · 표시된 이전 데이터는 최신 상태가 아닙니다.',true);if(state.data){state.data.error='웹/API 연결 실패';renderContainers();}}
   state.timer=setTimeout(poll,10000);
 }
-function page(name){state.page=name;document.querySelectorAll('[data-view]').forEach(n=>n.hidden=n.dataset.view!==name);document.querySelectorAll('[data-page]').forEach(n=>{if(n.dataset.page===name)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});}
+function page(name){document.querySelectorAll('[data-view]').forEach(n=>n.hidden=n.dataset.view!==name);document.querySelectorAll('[data-page]').forEach(n=>{if(n.dataset.page===name)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});}
 function render(){
   const d=state.data;
   $('#environment').textContent=d.daemon?`${d.daemon.name} · ${d.daemon.architecture} · Docker ${d.daemon.version}`:'Docker 수집 대기';

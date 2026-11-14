@@ -6,7 +6,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 
 repo = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(repo))
