@@ -54,6 +54,32 @@ class StorageTests(unittest.TestCase):
                 fixture.rejected(fixture.request(),503)
         finally:fixture.tearDown()
 
+    def test_lost_intent_ack_never_replays_action(self):
+        fixture=fixtures.AgentTests();fixture.setUp()
+        try:
+            request=fixture.request();original=fixture.client.insert
+            def committed_then_disconnected(*args):
+                original(*args)
+                raise StorageError('Acknowledgement lost')
+            with patch.object(fixture.client,'insert',side_effect=committed_then_disconnected):
+                fixture.rejected(request,503)
+            self.assertEqual(fixture.agent.action(request)['status'],'pending')
+            self.assertFalse(fixture.engine.actions)
+        finally:fixture.tearDown()
+
+    def test_segment_and_batch_size_remain_bounded(self):
+        s=Spool(self.path)
+        s.enqueue('container_logs',[{'body':'x'*700000} for _ in range(3)])
+        self.assertEqual(len(list(self.path.glob('*.pending'))),3)
+        manifest,rows=s.prepare()
+        self.assertEqual(len(rows),1)
+
+    def test_tty_partial_messages_and_multiline_bytes(self):
+        first=b'2026-11-14T12:13:14.123456789Z partial'
+        second=b'2026-11-14T12:13:14.123456790Z continuation\r\n'
+        decoded=[decode_record(payload)[1] for _,payload in frames(io.BytesIO(first+second),tty=True)]
+        self.assertEqual(b''.join(decoded),b'partialcontinuation\r\n')
+
     def test_retention_and_no_unique_key_assumption(self):
         for v in (0,1,2,True,3.0,101):
             with self.assertRaises(ValueError):years(v)
