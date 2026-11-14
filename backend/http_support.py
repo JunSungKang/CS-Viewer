@@ -44,13 +44,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass  # Keep request headers and bodies out of operational logs.
 
-    def send(self, status, value, headers=None, content_type='application/json; charset=utf-8'):
+    def send(self, status, value, content_type='application/json; charset=utf-8'):
         body = value if isinstance(value, bytes) else json.dumps(value, ensure_ascii=False).encode()
         self.send_response(status)
         for key, val in {'Content-Type': content_type, 'Content-Length': str(len(body)), 'Cache-Control': 'no-store',
                          'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
-                         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
-                         **(headers or {})}.items():
+                         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"}.items():
             self.send_header(key, val)
         self.end_headers()
         self.wfile.write(body)

@@ -1,4 +1,3 @@
-import base64
 import io
 import json
 from pathlib import Path
@@ -6,7 +5,6 @@ import struct
 import tempfile
 import unittest
 from unittest.mock import patch
-import uuid
 import contextlib
 import threading
 from backend import admin
@@ -75,7 +73,7 @@ class StorageTests(unittest.TestCase):
         s=Spool(self.path)
         s.enqueue('container_logs',[{'body':'x'*700000} for _ in range(3)])
         self.assertEqual(len(list(self.path.glob('*.pending'))),3)
-        manifest,rows=s.prepare()
+        _,rows=s.prepare()
         self.assertEqual(len(rows),1)
 
     def test_tty_partial_messages_and_multiline_bytes(self):
@@ -97,7 +95,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(params['start'],'2026-11-15 00:00:00.000000')
         self.assertEqual(params['end'],'2026-11-15 00:15:00.000000')
 
-    def test_retention_and_no_unique_key_assumption(self):
+    def test_retention_validation_and_default_ttl_partition(self):
         for v in (0,1,2,True,3.0,101):
             with self.assertRaises(ValueError):years(v)
         self.assertEqual(years(3),3);self.assertEqual(years(7),7)

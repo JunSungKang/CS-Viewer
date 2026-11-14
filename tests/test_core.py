@@ -51,9 +51,8 @@ class FakeEngine:
 
 class MemoryClient:
     database = 'test'
-    def __init__(self): self.events = []; self.writes = []
+    def __init__(self): self.events = []
     def insert(self, table, rows, token):
-        self.writes.append((table, rows, token))
         if table == 'action_events': self.events.extend(copy.deepcopy(rows))
     def query(self, *args, **kwargs): return b'TTL received_at + toIntervalYear(3)'
     def rows(self, sql, parameters=None, settings=None):
@@ -127,7 +126,7 @@ class AgentTests(unittest.TestCase):
         self.engine.raw['Name'] = '/crm'
         self.rejected(self.request(), 404)
 
-    def test_config_without_credentials_and_workspace_boundary(self):
+    def test_config_with_clickhouse_credentials_and_workspace_boundary(self):
         credentials = self.path / 'clickhouse.json'
         credentials.write_text(json.dumps({'url':'http://127.0.0.1:20140','user':'test','password':'test'}))
         config = {**self.config, 'workspace_root': str(self.path), 'spool_path': str(self.path / 'spool'), 'log_state_path':str(self.path / 'offsets'), 'clickhouse_config':str(credentials)}

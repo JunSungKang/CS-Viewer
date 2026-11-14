@@ -13,7 +13,7 @@ import socket
 import subprocess
 import threading
 import time
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import quote, urlsplit
 import uuid
 
 from .engine import Engine, EngineError, resource_usage
@@ -111,7 +111,6 @@ class Agent:
         self.collection_lock = threading.Lock()
         self.snapshot = {'collected_at': None, 'error': '첫 수집을 기다리는 중입니다.', 'containers': [], 'services': [], 'images': [], 'bases': []}
         self.image_cache = {}
-        self.modules = set(s['module'] for s in config['services'])
         self.aliases = {}
         for service in config['services']:
             for name in service['names']:
@@ -166,7 +165,7 @@ class Agent:
             info = self.verify_daemon()
             listed = self.engine.call('GET', '/containers/json?all=true')
             managed = [(c, self.aliases[n.lstrip('/')]) for c in listed for n in c.get('Names', []) if n.lstrip('/') in self.aliases]
-            # Docker returns one canonical name; de-duplicate any additional aliases.
+            # Collect each container ID once even when multiple aliases match.
             managed = list({c['Id']: (c, s) for c, s in managed}.values())
             with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
                 containers = list(pool.map(lambda item: self.container(*item), managed))

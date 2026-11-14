@@ -30,7 +30,7 @@ def main():
             return result.astimezone(datetime.timezone.utc)
         end=date(args.end,now);start=date(args.start,end-datetime.timedelta(minutes=15))
         if not start<end or end-start>datetime.timedelta(days=31):parser.error('Range must be positive and at most 31 days')
-        params={'module':args.module,'start':start.strftime('%Y-%m-%d %H:%M:%S.%f'),'end':end.strftime('%Y-%m-%d %H:%M:%S.%f'),'limit':args.limit}
+        params={'module':args.module,'start':start.strftime('%Y-%m-%d %H:%M:%S.%f'),'end':end.strftime('%Y-%m-%d %H:%M:%S.%f')}
         extra='';page_hint=args.limit
         if args.cursor:
             try:

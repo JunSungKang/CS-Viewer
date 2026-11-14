@@ -1,5 +1,4 @@
 """Real server tests, enabled locally or in CI with an isolated database."""
-import datetime
 import json
 import os
 from pathlib import Path

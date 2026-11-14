@@ -1,6 +1,5 @@
 """Exercise the complete control path against one owned disposable container."""
 import argparse
-import copy
 import http.client
 import json
 from pathlib import Path
@@ -51,15 +50,15 @@ try:
         def call(path, body):
             connection = http.client.HTTPConnection('127.0.0.1', web.server_port, timeout=45)
             connection.request('POST', path, json.dumps(body), {'Content-Type': 'application/json'})
-            response = connection.getresponse();data = json.load(response);headers = dict(response.getheaders());status = response.status
+            response = connection.getresponse();data = json.load(response);status = response.status
             connection.close()
             if status != 200:
                 raise RuntimeError((status, data))
-            return data, headers
+            return data
         results = []
         for action, before, after in [('restart', 'running', 'running'), ('stop', 'running', 'exited'), ('start', 'exited', 'running')]:
             request = {'id': container_id, 'action': action, 'expected_state': before, 'confirmation': name, 'request_id': str(uuid.uuid4())}
-            result, _ = call('/api/action', request)
+            result = call('/api/action', request)
             assert result['status'] == 'succeeded', result
             inspected = engine.inspect(container_id)
             assert inspected['State']['Status'] == after
