@@ -50,15 +50,20 @@ def main():
                     AND event_time>={{start:DateTime64(9,'UTC')}} AND event_time<{{end:DateTime64(9,'UTC')}} {extra}
                     ORDER BY event_time DESC,record_id,chunk,body_bytes DESC LIMIT 1 BY record_id,chunk LIMIT {{limit:UInt16}}""",params,
                     {'max_execution_time':5,'max_threads':1,'max_block_size':min(effective,128),'preferred_block_size_bytes':1048576,'max_result_bytes':2*1024*1024,'result_overflow_mode':'throw'})
-                break
             except StorageError as exc:
                 if exc.code not in (396,241,-1) or effective==1:raise
                 effective=max(1,effective//2)
-        next_cursor=None
-        if len(rows)==effective:
-            last=rows[-1]
-            next_cursor=base64.urlsafe_b64encode(json.dumps({'module':args.module,'start':params['start'],'end':params['end'],'time':last['event_time'],'id':last['record_id'],'chunk':last['chunk'],'page_limit':effective}).encode()).decode()
-        result={'start':params['start']+'+00:00','end':params['end']+'+00:00','page_limit':effective,'rows':rows,'next_cursor':next_cursor}
+                continue
+            next_cursor=None
+            if len(rows)==effective:
+                last=rows[-1]
+                next_cursor=base64.urlsafe_b64encode(json.dumps({'module':args.module,'start':params['start'],'end':params['end'],'time':last['event_time'],'id':last['record_id'],'chunk':last['chunk'],'page_limit':effective}).encode()).decode()
+            result={'start':params['start']+'+00:00','end':params['end']+'+00:00','page_limit':effective,'rows':rows,'next_cursor':next_cursor}
+            if len(json.dumps(result,ensure_ascii=False,indent=2).encode())+1>2*1024*1024:
+                if effective==1:raise StorageError('One chunk exceeds the serialized page limit')
+                effective=max(1,effective//2)
+                continue
+            break
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 if __name__=='__main__':main()

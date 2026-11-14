@@ -107,3 +107,8 @@ class IntegrationTests(unittest.TestCase):
             if cursor is None:break
         self.assertIsNone(cursor);self.assertEqual([row['chunk'] for row in seen],[i*len(body) for i in range(8)])
         self.assertTrue(all(row['body']==body for row in seen))
+        output=io.StringIO()
+        limited=[*args];limited[limited.index('1000')]='2'
+        with patch('sys.argv',limited),contextlib.redirect_stdout(output):admin.main()
+        self.assertLessEqual(len(output.getvalue().encode()),2*1024*1024)
+        self.assertEqual(len(json.loads(output.getvalue())['rows']),1)

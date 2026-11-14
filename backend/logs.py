@@ -92,7 +92,7 @@ class Collector:
         conn=UnixConnection(self.engine.path,5)
         pending=[];counts={};first_ns=None;position=0;prefix_hash=hashlib.sha256();full_hash=hashlib.sha256();last_byte=b''
         old_bytes=tty_open['bytes'] if tty_open else 0
-        next_partials={k:dict(v) for k,v in partials.items()}
+        next_partials={k:dict(v) for k,v in partials.items()};verified_partials=set()
         def persist():
             if pending:
                 self.store.enqueue('container_logs',pending)
@@ -119,13 +119,19 @@ class Collector:
                     ns,body=decode_record(payload)
                     last_count=counts.get(stream,{'ns':None,'count':0})
                     occurrence=last_count['count']+1 if last_count['ns']==ns else 1
-                    counts[stream]={'ns':ns,'count':occurrence}
+                    hasher=last_count['hash'] if last_count['ns']==ns else hashlib.sha256()
+                    hasher.update(struct.pack('>Q',len(payload))+payload)
+                    counts[stream]={'ns':ns,'count':occurrence,'hash':hasher}
                     old_partial=partials.get(stream)
                     replay_partial=old_partial is not None and ns==old_partial['ns']
                     if previous is not None and ns<=previous*1000000000 and not replay_partial:continue
-                    if replay_partial and occurrence<=old_partial['count']:continue
+                    if replay_partial and occurrence<=old_partial['count']:
+                        if occurrence==old_partial['count']:
+                            if hasher.hexdigest()!=old_partial.get('sha256'):raise EngineError('Partial source prefix changed; rotation or loss requires inspection')
+                            verified_partials.add(stream)
+                        continue
                     if body.endswith(b'\n'):next_partials.pop(stream,None)
-                    else:next_partials[stream]={'ns':ns,'count':occurrence}
+                    else:next_partials[stream]={'ns':ns,'count':occurrence,'sha256':hasher.hexdigest()}
                     rid=hashlib.sha256(cid.encode()+stream.encode()+str(ns).encode()+str(occurrence).encode()+body).hexdigest()[:32]
                 batch=str(uuid.uuid4())
                 for chunk,offset in enumerate(range(0,max(1,len(body)),256*1024)):
@@ -136,6 +142,7 @@ class Collector:
                         'module':service['module'],'role':service['role'],'container_name':name,'container_id':cid,
                         'stream':stream,'record_id':rid,'occurrence':occurrence,'chunk':offset_id+offset if tty else chunk,'body_bytes':len(piece),'body':text,'encoding':encoding})
                 if len(pending)>=200:persist()
+            if not tty and set(partials)-verified_partials:raise EngineError('Partial source prefix missing; rotation or loss requires inspection')
             if tty and position<old_bytes:raise EngineError('TTY prefix rotated before archive could resume')
             persist()
             next_cursor={'window':{'until':end},'partials':next_partials}

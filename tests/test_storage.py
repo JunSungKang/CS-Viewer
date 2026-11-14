@@ -10,6 +10,7 @@ import uuid
 import contextlib
 import threading
 from backend import admin
+from backend.engine import EngineError
 
 from backend.clickhouse import StorageError, timestamp
 from backend.logs import Collector, frames, decode_record
@@ -182,6 +183,29 @@ class StorageTests(unittest.TestCase):
         client=unittest.mock.Mock(database='test')
         client.query.return_value=b"CREATE TABLE x (received_at DateTime64(0)) ENGINE=MergeTree ORDER BY tuple() TTL received_at + toIntervalYear(3) DELETE WHERE module != 'short', received_at + toIntervalDay(1) DELETE WHERE module='short' SETTINGS index_granularity=8192"
         self.assertEqual(set(retention_status(client).values()),{None})
+
+    def test_rotated_non_tty_partial_prefix_is_reported_without_advancing(self):
+        for rotated in (b'B',b'BC'):
+            folder=self.path/rotated.decode();cid='a'*64;prefix=b'1970-01-01T00:00:02.123456789Z '
+            def frame(body):
+                raw=prefix+body
+                return b'\x01\0\0\0'+struct.pack('>I',len(raw))+raw
+            responses=[frame(b'A')+frame(b'B'),b''.join(frame(bytes([c])) for c in rotated)]
+            class Response(io.BytesIO):status=200
+            class Connection:
+                def __init__(self,*a):pass
+                def request(self,*a):pass
+                def getresponse(self):return Response(responses.pop(0))
+                def close(self):pass
+            engine=unittest.mock.Mock(path='test',prefix='/v1.51')
+            engine.inspect.return_value={'Id':cid,'Name':'/owned','Config':{'Tty':False}}
+            collector=Collector(engine,unittest.mock.Mock(),{},folder);collector.cutover=0
+            with patch('backend.logs.UnixConnection',Connection):
+                with patch('backend.logs.time.time',return_value=100):collector.collect(cid,'owned',{'module':'test','role':'web'})
+                before=(folder/(cid+'.json')).read_bytes()
+                with patch('backend.logs.time.time',return_value=110),self.assertRaisesRegex(EngineError,'Partial source prefix'):
+                    collector.collect(cid,'owned',{'module':'test','role':'web'})
+            self.assertEqual((folder/(cid+'.json')).read_bytes(),before)
 
     def test_size_failure_does_not_escape_archive_loop(self):
         store=Store({},self.path,client=MemoryClient())

@@ -37,3 +37,5 @@ Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 �
 긴 행의 미완료 partial은 Docker가 같은 과거 시각으로 후속 조각을 기록할 수 있으므로 해당 시각과 이미 보관한 occurrence를 유지해 재개합니다. TTY 미완료 구간은 원문 prefix 길이와 SHA256을 대조한 뒤 증가분만 보관합니다. 원본 회전으로 prefix가 달라지면 조용히 건너뛰지 않고 오류로 표시합니다. 열린 긴 행이 오래 지속되면 해당 원본의 재독 비용이 늘 수 있습니다.
 
 원문 조회 결과는 rows, start, end, next_cursor를 포함합니다. 다음 페이지는 같은 --module/--start/--end와 --cursor 값을 사용합니다. 반환 용량을 넘는 큰 조각에서는 page_limit을 자동으로 낮춥니다. TTY chunk는 바이트 위치이며 body_bytes는 인코딩 전 길이입니다.
+
+non-TTY의 열린 partial도 이미 보관한 조각 수와 prefix SHA256을 함께 검증합니다. 회전으로 prefix가 바뀌거나 부족해지면 새 조각을 과거 조각으로 오인해 건너뛰지 않고 오류를 표시하며 cursor를 전진하지 않습니다. 페이지 한도는 최종 JSON 직렬화 결과에도 적용합니다.
