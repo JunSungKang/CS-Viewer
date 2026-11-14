@@ -1,6 +1,15 @@
 [project]
 name = "cs-viewer"
 version = "1.0.0"
-description = "Private Docker container operations console"
+description = "Self-hosted Docker operations dashboard with ClickHouse-backed telemetry"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 dependencies = []
+keywords = ["docker", "monitoring", "dashboard", "clickhouse"]
+
+[project.urls]
+Homepage = "https://github.com/JunSungKang/CS-Viewer"
+Repository = "https://github.com/JunSungKang/CS-Viewer"
+Issues = "https://github.com/JunSungKang/CS-Viewer/issues"
