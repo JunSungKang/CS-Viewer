@@ -1,33 +1,41 @@
-# 운영 계약
+# 운영
 
-## 연결과 실행
+ClickHouse Server가 필수다. 단일 호스트 에이전트가 Docker Engine과 ClickHouse에 접근하며 웹 컨테이너는 에이전트의 제한된 API만 사용한다. 앱 계정은 SELECT/INSERT, 초기화·보존 변경은 별도 운영 계정을 사용한다. 접속 정보는 workspace 안의 비추적 JSON 파일에서 읽는다.
 
-공개 웹 주소는 https://175.195.62.165:20035/ 이다. Nginx가 TLS를 종료하고 웹/API 컨테이너의 8080으로 전달한다. 호스트 에이전트는 127.0.0.1:20135에서 수신한다. 웹은 `CS_AGENT_URL`에 지정한 로컬 어댑터로 요청을 전달한다.
+설정 예시는 config.example.json이다. clickhouse_config, spool_path, log_state_path, lock_path는 workspace 내부 절대 경로여야 한다. 서버는 운영 환경에서 별도 컨테이너로 배포하며 데이터·설정·임시 파일·로그를 workspace에 bind mount한다. 공인 DB 포트는 열지 않는다.
 
-계정·암호·세션·내부 토큰 설정은 사용하지 않는다. 접속한 방문자에게 관리 인벤토리의 조회와 제어를 제공한다. 웹 컨테이너의 Docker socket 미마운트, 읽기 전용 파일시스템, capability 제거, 자원 제한과 기존 TLS 구성은 유지한다.
+측정 수집 10초, 원문 로그 polling 10초, flush 30초가 기본이다. 화면은 최근 60회 메모리 캐시를 사용하고 재시작 시 최근 하루에서 복구한다. 과거 데이터는 DB에서 계속 보존한다. 저장 오류·로그 수집 오류·대기 용량을 별도로 표시하며 제어는 영구 intent 기록에 실패하면 실행하지 않는다.
 
-JSON 요청은 객체·8KiB 이하만 처리하며 동시 연결은 32개로 제한한다. 임의 파일 경로나 Engine API는 노출하지 않는다. 환경변수와 원본 health 로그를 상태 응답에 포함하지 않는다.
+## 보존 기간
 
-## 제어
+측정·원문·제어 이벤트 각각 기본 3년이다. 3~100년의 정수로 설정한다. 기간은 달력상의 YEAR이며 수신 시각 기준이다. 월 파티션/part 단위 만료로 일부 기록은 기간보다 오래 남는다. 관리자 명령은 서버의 실제 TTL을 확인한다.
 
-실제 ID, 예상 상태, 확인 이름과 요청 UUID를 보낸다. 등록된 모든 컨테이너에 같은 동작을 제공한다. 공유 잠금 안에서 daemon ID, 인벤토리와 실제 대상·상태를 다시 확인한다. 먼저 작업 이력을 저장하고 시작·중지·재시작 중 하나를 실행한 다음 실제 상태를 검증한다.
+```sh
+python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json status
+python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json retention --table container_logs --years 5
+python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json retention --table container_logs --years 5 --apply
+```
 
-같은 UUID는 다시 실행하지 않으며 다른 내용으로 재사용하면 거절한다. 응답 단절·검증 시간 초과는 unknown, 프로세스 재시작 시 미완료 pending도 unknown으로 남긴다. 결과를 확인하기 전에 자동 재요청하지 않는다. 이력의 dashboard는 요청 경로이며 사용자 신원을 뜻하지 않는다.
+첫 명령은 상태, 두 번째는 영향 미리보기, 세 번째는 적용이다. 축소 전에도 반드시 미리보기를 확인한다. 이미 삭제된 데이터는 기간 확대로 복원되지 않는다. 설정을 바꿔도 즉각적인 전체 TTL materialization을 실행하지 않는다. 시작할 때 TTL을 자동으로 단축하지 않는다. 3년 미만의 직접 서버 변경은 저장 오류로 표시한다.
 
-critical은 공통 인프라 작업의 영향을 안내하는 표시다. 작업 잠금과 대상 확인을 생략하는 기능은 없다. 이 앱 밖의 배포도 동일한 macOS flock을 사용한다. 잠금 파일을 삭제·교체하지 않는다.
+## 원문 조회
 
-## 측정과 보존
+```sh
+python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/app.json logs --module mailbox --limit 100
+```
 
-수집은 기본 10초, 최근 60회를 표시한다. 측정은 24시간, 작업 이력은 90일 보관한다. 호스트 vm_stat 메모리는 추정치이며 VM 총량·컨테이너 사용 합계와 구분한다. OOMKilled는 종료 이력이고 RestartCount는 누적 자동 재시작 횟수다.
+기본 최근 15분이며 --start/--end에는 시간대가 있는 ISO 시각을 준다. 최대 31일/1,000행/2MiB/5초다. 공개 웹 원문 endpoint는 없다. body와 encoding으로 바이트를 복원한다. 큰 레코드는 같은 record_id의 chunk 순서로 결합한다. 동일 내용의 반복 발생은 occurrence로 구분한다.
 
-HTTP 측정은 연결부터 본문 수신까지 3초·1MiB 한도이며 redirect를 따라가지 않는다. TLS 연결 시간에는 handshake가 포함된다. p95는 표시한 유효 표본으로 계산한다. 수집 실패 시 이전 시각을 유지하고 제어를 중단한다.
+## 장애와 복구
 
-이미지 diffID, RepoDigest와 로컬 image ID는 구분한다. 이미지 크기를 합산하여 실제 추가 디스크 사용량이라고 표시하지 않는다.
+outbox는 기본 1GiB의 제한된 파일 대기열이다. 기록 확인 전 삭제하지 않는다. 전송은 at-least-once이며 불확정 응답 재시도 시 중복 가능성이 있다. 고정 batch token과 레코드 ID를 사용하며 중복 제거 창은 유한하다. 원문 조회는 record_id/chunk로 식별 가능한 중복을 접는다. 운영 데이터의 정확한 분석 집계에서는 이 특성을 고려한다.
 
-## 교체와 복구
+Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 기록을 backfill하지 않는다. 회전·삭제된 원본과 파일에만 남긴 앱 로그는 복원하지 못한다. TTY는 stdout/stderr가 이미 합쳐진 tty 스트림이다. TTY의 body는 Docker가 붙인 시각을 포함한 구간 원문이며, 조각은 chunk 순서로 결합한다. event_time은 해당 구간 첫 Docker 시각이고 본문 속 개별 시각도 보존한다. 완료한 구간만 offset을 전진하여 조용한 스트림의 과거를 반복 조회하지 않는다. 수집기를 장기간 중단하면 Docker 보관 기간을 넘는 공백이 생길 수 있으므로 오류와 대기열을 확인한다.
 
-supervise-agent.py는 종료된 에이전트를 5초 후 다시 실행한다. supervisor 교체는 소유 PID와 정확한 경로를 확인한 후 공유 잠금 안에서 수행한다. 상태 DB와 잠금 inode를 보존한다.
+단일 host writer와 공유 flock이 제어 직렬화를 담당한다. 재시작 전 pending은 unknown으로 표시하고 재실행하지 않는다. DB 장애 동안 최신 수집은 계속하지만 제어 intent를 저장하지 못하면 제어는 거부한다. 단일 디스크 보관은 외부 백업·복제 보장을 대신하지 않는다.
 
-웹과 호스트 에이전트는 같은 릴리스의 프로토콜을 사용한다. 운영 모델의 해당 이미지와 로컬 호스트 릴리스를 함께 갱신하고 다른 서비스는 재생성하지 않는다. 실패 시 직전 해당 이미지와 호스트 릴리스로 복구한다. 운영 데이터·키·볼륨을 삭제하지 않는다.
+긴 행의 미완료 partial은 Docker가 같은 과거 시각으로 후속 조각을 기록할 수 있으므로 해당 시각과 이미 보관한 occurrence를 유지해 재개합니다. TTY 미완료 구간은 원문 prefix 길이와 SHA256을 대조한 뒤 증가분만 보관합니다. 원본 회전으로 prefix가 달라지면 조용히 건너뛰지 않고 오류로 표시합니다. 열린 긴 행이 오래 지속되면 해당 원본의 재독 비용이 늘 수 있습니다.
 
-Mac 재부팅 후 자동 기동과 백업·복원 자동화는 별도 운영 기능이며 현재 구현하지 않는다.
+원문 조회 결과는 rows, start, end, next_cursor를 포함합니다. 다음 페이지는 같은 --module/--start/--end와 --cursor 값을 사용합니다. 반환 용량을 넘는 큰 조각에서는 page_limit을 자동으로 낮춥니다. TTY chunk는 바이트 위치이며 body_bytes는 인코딩 전 길이입니다.
+
+non-TTY의 열린 partial도 이미 보관한 조각 수와 prefix SHA256을 함께 검증합니다. 회전으로 prefix가 바뀌거나 부족해지면 새 조각을 과거 조각으로 오인해 건너뛰지 않고 오류를 표시하며 cursor를 전진하지 않습니다. 페이지 한도는 최종 JSON 직렬화 결과에도 적용합니다.

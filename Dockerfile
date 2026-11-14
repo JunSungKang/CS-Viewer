@@ -4,6 +4,8 @@ FROM ${PYTHON_IMAGE}
 RUN python3 -m pip --disable-pip-version-check uninstall -y pip \
     && apt-get purge -y python3-pip-whl python3-setuptools-whl \
     && rm -rf /var/lib/apt/lists/*
+# The dedicated viewer image contains no embedded database runtime.
+RUN find /usr/lib /usr/local/lib -depth \( -iname '*sqlite*' -o -iname '*_sqlite3*' \) -exec rm -rf '{}' +
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY backend ./backend

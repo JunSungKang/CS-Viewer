@@ -3,7 +3,6 @@
   "docker_socket": "/Users/local-user/.docker/run/docker.sock",
   "daemon_id": "COPY_FROM_THE_SELECTED_DOCKER_CONTEXT",
   "lock_path": "/absolute/workspace/operations/run/deploy.lock",
-  "state_path": "/absolute/workspace/operations/cs-viewer/state/metrics.db",
   "port": 20135,
   "interval": 10,
   "services": [
@@ -26,5 +25,11 @@
   },
   "bases": {
     "Python 3.14": "platform/python314:ubuntu26.04-20261109-r2"
-  }
+  },
+  "clickhouse_config": "/absolute/workspace/operations/clickhouse/app.json",
+  "spool_path": "/absolute/workspace/operations/cs-viewer/state/outbox",
+  "log_state_path": "/absolute/workspace/operations/cs-viewer/state/log-offsets",
+  "spool_limit_bytes": 1073741824,
+  "flush_seconds": 30,
+  "log_poll_seconds": 10
 }

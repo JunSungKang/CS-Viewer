@@ -40,3 +40,7 @@ python3.14 -B scripts/smoke-docker.py --config /absolute/workspace/operations/cs
 마지막 명령은 소유 표식이 있는 격리 컨테이너 하나로 웹→에이전트→공유 잠금→실제 시작/중지/재시작과 중복 방지를 확인한 뒤 그 컨테이너만 제거합니다. 운영 컨테이너·볼륨은 변경하지 않습니다. 임시 산출물은 checkout의 `.runtime/`에 둡니다.
 
 [구조·수용 기준](docs/architecture.md) · [운영](docs/operations.md) · [검증](docs/validation.md)
+
+## ClickHouse 저장소
+
+ClickHouse Server가 필수이며 측정값·Docker 원문 로그·제어 이력을 저장합니다. 기본 보존 기간은 최소 3년이고 운영 명령으로 변경합니다. [설정과 복구](docs/operations.md), [구조](docs/architecture.md), [검증](docs/validation.md)를 참고하세요. 원문 로그를 공개 웹에 노출하지 않습니다.

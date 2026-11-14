@@ -19,6 +19,8 @@ import uuid
 from .engine import Engine, EngineError, resource_usage
 from .http_support import APIError, Handler, Server
 from .store import Store
+from .clickhouse import StorageError
+from .logs import Collector
 
 PROBE_TIMEOUT = 3
 
@@ -104,7 +106,7 @@ class Agent:
     def __init__(self, config, engine=None, store=None):
         self.config = config
         self.engine = engine or Engine(config['docker_socket'])
-        self.store = store or Store(config['state_path'])
+        self.store = store or Store(config['clickhouse'], config['spool_path'], spool_limit=config.get('spool_limit_bytes', 1024**3))
         self.snapshot_lock = threading.Lock()
         self.collection_lock = threading.Lock()
         self.snapshot = {'collected_at': None, 'error': '첫 수집을 기다리는 중입니다.', 'containers': [], 'services': [], 'images': [], 'bases': []}
@@ -188,7 +190,10 @@ class Agent:
                             unhealthy=any(c['health'] == 'unhealthy' for c in members),
                             cpu_percent=round(sum(c['cpu_percent'] for c in members), 1) if members and all(c['cpu_percent'] is not None for c in members) else None,
                             memory_bytes=sum(c['memory_bytes'] for c in members) if members and all(c['memory_bytes'] is not None for c in members) else None)
-            self.store.sample(probes)
+            try:
+                self.store.sample(probes)
+            except (OSError, ValueError):
+                pass  # Store reports archival failure independently of the live snapshot.
             missing = [s['name'] for s in self.config['services'] if not any(c['name'] in s['names'] for c in containers)]
             data = {'collected_at': time.time(), 'error': None, 'containers': containers, 'services': probes,
                     'images': images, 'bases': bases, 'image_errors': image_errors, 'missing': missing,
@@ -204,6 +209,9 @@ class Agent:
     def state(self):
         with self.snapshot_lock:
             state = dict(self.snapshot)
+        state['storage'] = self.store.status()
+        if hasattr(self, 'log_collector'):
+            state['storage']['log_error'] = self.log_collector.error
         state['audit'] = self.store.audit()
         state['trends'] = {s['module']: self.store.history(s['module']) for s in state['services']}
         return state
@@ -222,6 +230,8 @@ class Agent:
                 previous = self.store.begin(request_id, fingerprint, 'dashboard', target, action)
             except ValueError as exc:
                 raise APIError(409, str(exc)) from exc
+            except StorageError as exc:
+                raise APIError(503, '제어 이력을 저장할 수 없어 작업을 실행하지 않았습니다.') from exc
             if previous:
                 return {k: v for k, v in previous.items() if k != 'fingerprint'}
             executed = False
@@ -291,10 +301,14 @@ def make_handler(agent):
 def load_config(path):
     config = json.loads(Path(path).read_text())
     root = Path(config['workspace_root']).resolve()
-    for key in ('lock_path', 'state_path'):
+    for key in ('lock_path', 'spool_path', 'log_state_path', 'clickhouse_config'):
         destination = Path(config[key]).resolve()
         if not destination.is_relative_to(root):
             raise ValueError(key + ' must stay in the workspace')
+    config['clickhouse'] = json.loads(Path(config['clickhouse_config']).read_text())
+    for key, minimum, maximum in (('interval',5,3600),('flush_seconds',1,300),('log_poll_seconds',1,300),('spool_limit_bytes',1048576,10737418240)):
+        if key in config and (type(config[key]) is not int or not minimum<=config[key]<=maximum):
+            raise ValueError('Invalid background worker setting: '+key)
     for service in config['services']:
         if not all(isinstance(service.get(key), str) and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', service[key]) for key in ('module', 'role', 'name')):
             raise ValueError('Invalid service metadata')
@@ -310,12 +324,32 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     config = load_config(args.config)
-    Path(config['state_path']).parent.mkdir(parents=True, exist_ok=True)
+    lease_path = Path(config['spool_path']).parent / 'collector.lock'
+    lease_path.parent.mkdir(parents=True, exist_ok=True)
+    lease = lease_path.open('a+')
+    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
     agent = Agent(config)
     def loop():
         while True:
             agent.collect()
             time.sleep(max(5, config.get('interval', 10)))
+    agent.log_collector = Collector(agent.engine, agent.store, agent.aliases, config['log_state_path'], config['daemon_id'])
+    def archive_loop():
+        while True:
+            try:
+                agent.store.flush()
+            except Exception:
+                with agent.store.lock:agent.store.storage['error']='Archive worker failed; retrying'
+            time.sleep(config.get('flush_seconds', 30))
+    def log_loop():
+        while True:
+            try:
+                agent.log_collector.poll()
+            except Exception:
+                agent.log_collector.error='Log worker failed; retrying'
+            time.sleep(config.get('log_poll_seconds', 10))
+    threading.Thread(target=archive_loop, daemon=True).start()
+    threading.Thread(target=log_loop, daemon=True).start()
     threading.Thread(target=loop, daemon=True).start()
     server = Server(('127.0.0.1', config.get('port', 20135)), make_handler(agent))
     print(json.dumps({'event': 'agent.started', 'port': server.server_port}), flush=True)

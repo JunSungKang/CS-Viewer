@@ -55,7 +55,7 @@ function render(){
   const d=state.data;
   $('#environment').textContent=d.daemon?`${d.daemon.name} · ${d.daemon.architecture} · Docker ${d.daemon.version}`:'Docker 수집 대기';
   const flash=state.flash?.until>Date.now()?state.flash:null;
-  notice(stale()?(d.error||'최신 수집이 지연되고 있습니다. 제어가 잠겼습니다.'):(d.missing?.length?`운영 설정에서 찾지 못한 컨테이너: ${d.missing.join(', ')}`:flash?.message||''),stale()||Boolean(d.missing?.length)||Boolean(flash?.bad));
+  notice(stale()?(d.error||'최신 수집이 지연되고 있습니다. 제어가 잠겼습니다.'):(d.storage?.error||d.storage?.log_error)?((d.storage.error||d.storage.log_error)+' · 저장 대기 '+bytes(d.storage.backlog_bytes)):(d.missing?.length?`운영 설정에서 찾지 못한 컨테이너: ${d.missing.join(', ')}`:flash?.message||''),stale()||Boolean(d.storage?.error)||Boolean(d.storage?.log_error)||Boolean(d.missing?.length)||Boolean(flash?.bad));
   renderBoard();renderContainers();renderImages();renderMounts();
 }
 function p95(items){const values=items.filter(s=>s.http_ms!==null&&!s.error).map(s=>s.http_ms).sort((a,b)=>a-b);return values.length?values[Math.ceil(values.length*.95)-1].toFixed(1)+' ms':'—';}
@@ -67,12 +67,12 @@ function spark(items,module){
 }
 function renderBoard(){
   const d=state.data,host=d.host_memory||{},daemon=d.daemon||{},members=d.containers||[];
-  const postgres=members.find(container=>container.role==='postgresql');
+  const postgres=members.find(container=>container.role==='postgresql'),clickhouse=members.find(container=>container.role==='clickhouse');
   const infra=(title,value,detail)=>el('section',{class:'infra-card'},el('h3',{},title),el('div',{class:'number'},value),el('small',{},detail));
   put('#infra',infra('호스트 메모리',bytes(host.total),`사용 추정 ${bytes(host.used_estimate)} · Mac 물리 메모리`),
     infra('Docker VM 메모리',bytes(daemon.memory_total),`컨테이너 사용 합계 ${bytes(members.reduce((n,c)=>n+(c.memory_bytes||0),0))} · VM 총량과 구분`),
     infra('공통 인프라',`${members.filter(c=>c.state==='running').length} / ${members.length} 실행`,
-      '관리 대상 · PostgreSQL '+(postgres?label(postgres)+' · '+ports(postgres):'조회 불가')));
+      '관리 대상 · PostgreSQL '+(postgres?label(postgres)+' · '+ports(postgres):'조회 불가')+' · ClickHouse '+(clickhouse?label(clickhouse):'조회 불가')));
   const services=[...(d.services||[])].sort((a,b)=>Number(Boolean(b.error))-Number(Boolean(a.error))||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
   put('#services',services.length?services.map(s=>{
     const history=d.trends?.[s.module]||[],containers=members.filter(c=>c.module===s.module);
@@ -84,7 +84,7 @@ function renderBoard(){
       el('div',{class:'resource'},el('span',{},'CPU ',el('strong',{},s.cpu_percent===null?'—':s.cpu_percent+'%')),el('span',{},'MEM ',el('strong',{},bytes(s.memory_bytes))),el('span',{},'실행 ',el('strong',{},s.running+' / '+s.total))),
       s.restarts?el('p',{class:'footnote'},'컨테이너 자동 재시작 누적 '+s.restarts+'회'+(s.oom_history?' · 메모리 부족 종료 이력':'')):null);
   }):el('p',{class:'empty'},'첫 측정을 수집하고 있습니다.'));
-  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 24시간 보관 · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
+  $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 보존 ${d.storage?.retention_years?.service_samples?d.storage.retention_years.service_samples+'년 이상':'확인 중'} · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
 }
 function options(select,values,current){const keys=values.map(v=>v[0]);if(!keys.includes(current))current=keys[0]||null;const signature=JSON.stringify(values);if(select.dataset.options!==signature){select.replaceChildren(...values.map(([key,text])=>el('option',{value:key},text)));select.dataset.options=signature;}if(current!==null)select.value=current;return current;}
 function renderContainers(){

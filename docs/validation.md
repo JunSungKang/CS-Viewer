@@ -1,19 +1,7 @@
 # 검증
 
-## 2026-11-13 변경
+단위/회귀 검사는 `python3 -B -m unittest discover -s tests -v`, 프런트 구문은 `node --check web/app.js`다. 실제 ClickHouse 검사는 CS_TEST_CLICKHOUSE_CONFIG의 workspace credential JSON 또는 CI 전용 CS_TEST_CLICKHOUSE_URL로 활성화한다. 매 시험은 고유한 격리 DB를 만들고 제거한다.
 
-주소를 열면 관제 보드가 즉시 표시되도록 웹과 호스트 에이전트의 접근 절차를 단순화했다. 계정·세션·내부 토큰과 대상별 제어 권한 구현 및 관련 설정을 제거했다.
+필수 대상은 UUID 중복과 충돌, pending 재시작, 기록 실패 시 제어 거부, 저장 장애와 최신 상태 분리, outbox 재시작/ack 복구/한도, Docker 프레임·나노초·중복 내용, 기본 3년·확대·축소 preview·윤년이다. 운영용 Docker smoke는 별도 소유 canary만 시작/중지/재시작한다.
 
-다음을 단위·통합 검사한다.
-
-- 추가 요청 헤더 없이 상태 조회와 작업 요청 전달.
-- 웹과 실제 에이전트 HTTP 처리기를 연결한 readiness, 상태, 작업 응답.
-- 처음부터 표시되는 관제 화면, 기존 CSP와 요청 크기·JSON 형식 제한.
-- 설정의 workspace 경계, 관리 인벤토리, 실제 daemon·대상 ID·예상 상태·확인 이름.
-- 실제 macOS flock 경합, 요청 멱등성, 미확정 결과의 재실행 방지.
-- 상태 응답의 환경변수·health 로그 제외, 수집 실패 시 이전 시각 유지.
-- CPU delta·메모리 cache 계산과 HTTP 총 응답 시간 제한.
-
-격리 lifecycle 검사는 소유한 시험 컨테이너 하나만 사용한다. 웹→에이전트→잠금→Docker의 시작·중지·재시작 및 UUID 중복 방지를 확인하고 시험 컨테이너를 제거한다.
-
-실제 운영 교체·HTTPS 조회·다른 서비스 보존 결과와 정확한 실행 이미지/호스트 릴리스는 로컬 `operations/cs-viewer/reports/remove-access-controls-20261113.json`에 기록한다. 과거 버전의 보안 스캔 결과를 새 릴리스 검사 결과로 표시하지 않는다.
+운영 튜닝 결과는 workspace operations/cs-viewer/reports/clickhouse-benchmark.json과 전환 보고서에 기록한다. 합성 데이터 분포·규모·warm/cold 조건·반복 횟수·쿼리 시간·CPU·메모리·압축 크기·인덱스·parts·복구 결과를 함께 해석한다. 다른 회사의 성능 배수를 이 환경의 결과로 사용하지 않는다.

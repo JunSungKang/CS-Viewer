@@ -40,7 +40,7 @@ try:
                 '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                 '--label', 'com.cs-viewer.smoke=' + name, 'platform/python314:ubuntu26.04-20261109-r2',
                 'python3', '-B', '-c', 'import time; time.sleep(300)'], text=True).strip()
-        local = {**config, 'state_path': str(Path(temporary) / 'state.db'), 'services': [
+        local = {**config, 'spool_path': str(Path(temporary) / 'outbox'), 'log_state_path': str(Path(temporary) / 'offsets'), 'services': [
             {'name': name, 'module': 'smoke', 'role': 'worker', 'names': [name]}], 'probes': {}, 'bases': {}}
         agent = Agent(local, engine=engine)
         adapter = Server(('127.0.0.1', 0), agent_handler(agent));servers.append(adapter)
@@ -68,7 +68,7 @@ try:
                 assert engine.inspect(container_id)['State']['StartedAt'] == started, 'Duplicate restart executed'
             results.append({'action': action, 'state': after, 'status': result['status']})
         print(json.dumps({'direct_control': results, 'idempotent_restart': True, 'production_containers_changed': False}))
-        agent.store.db.close()
+        agent.store.flush()
 finally:
     for server in reversed(servers):
         server.shutdown();server.server_close()
