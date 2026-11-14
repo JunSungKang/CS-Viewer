@@ -79,14 +79,20 @@ class Collector:
         previous=cursor.get('window',{}).get('until')
         end=int(time.time())-1
         if previous is not None and end<=previous:return
+        partials={k:dict(v) for k,v in cursor.get('partials',{}).items()}
+        tty_open=cursor.get('tty_open')
         since_ns=previous*1000000000+1 if previous is not None else self.cutover
+        for partial in partials.values():since_ns=min(since_ns,partial['ns'])
+        if tty_open:since_ns=min(since_ns,tty_open['ns'])
         since='%d.%09d'%divmod(since_ns,1000000000)
         params=urlencode({'stdout':1,'stderr':1,'timestamps':1,'since':since,'until':end})
         raw=self.engine.inspect(cid)
         if raw['Id']!=cid or raw['Name'].lstrip('/')!=name:raise EngineError('Container changed')
         tty=raw.get('Config',{}).get('Tty',False)
         conn=UnixConnection(self.engine.path,5)
-        pending=[];counts={};first_ns=None;tty_chunk=0
+        pending=[];counts={};first_ns=None;position=0;prefix_hash=hashlib.sha256();full_hash=hashlib.sha256();last_byte=b''
+        old_bytes=tty_open['bytes'] if tty_open else 0
+        next_partials={k:dict(v) for k,v in partials.items()}
         def persist():
             if pending:
                 self.store.enqueue('container_logs',pending)
@@ -98,11 +104,28 @@ class Collector:
             for stream,payload in frames(response,tty):
                 if tty:
                     if first_ns is None:first_ns=decode_record(payload)[0]
-                    ns=first_ns;body=payload;occurrence=1
-                    rid=hashlib.sha256((cid+':'+since+':'+str(end)).encode()).hexdigest()[:32]
+                    full_hash.update(payload);last_byte=payload[-1:]
+                    skipped=min(len(payload),max(0,old_bytes-position))
+                    prefix_hash.update(payload[:skipped])
+                    old_position=position;position+=len(payload)
+                    if position>=old_bytes and tty_open and prefix_hash.hexdigest()!=tty_open['sha256']:
+                        raise EngineError('TTY source prefix changed; rotation or loss requires inspection')
+                    body=payload[skipped:]
+                    if not body:continue
+                    ns=first_ns;occurrence=1
+                    offset_id=old_position+skipped
+                    rid=hashlib.sha256((cid+':'+str(first_ns)).encode()).hexdigest()[:32]
                 else:
                     ns,body=decode_record(payload)
-                    counts[stream]=counts.get(stream,0)+1;occurrence=counts[stream]
+                    last_count=counts.get(stream,{'ns':None,'count':0})
+                    occurrence=last_count['count']+1 if last_count['ns']==ns else 1
+                    counts[stream]={'ns':ns,'count':occurrence}
+                    old_partial=partials.get(stream)
+                    replay_partial=old_partial is not None and ns==old_partial['ns']
+                    if previous is not None and ns<=previous*1000000000 and not replay_partial:continue
+                    if replay_partial and occurrence<=old_partial['count']:continue
+                    if body.endswith(b'\n'):next_partials.pop(stream,None)
+                    else:next_partials[stream]={'ns':ns,'count':occurrence}
                     rid=hashlib.sha256(cid.encode()+stream.encode()+str(ns).encode()+str(occurrence).encode()+body).hexdigest()[:32]
                 batch=str(uuid.uuid4())
                 for chunk,offset in enumerate(range(0,max(1,len(body)),256*1024)):
@@ -111,10 +134,13 @@ class Collector:
                     except UnicodeError:text=base64.b64encode(piece).decode();encoding='base64'
                     pending.append({'event_time':timestamp(ns),'received_at':int(time.time()),'batch_id':batch,
                         'module':service['module'],'role':service['role'],'container_name':name,'container_id':cid,
-                        'stream':stream,'record_id':rid,'occurrence':occurrence,'chunk':tty_chunk if tty else chunk,'body':text,'encoding':encoding})
-                    if tty:tty_chunk+=1
+                        'stream':stream,'record_id':rid,'occurrence':occurrence,'chunk':offset_id+offset if tty else chunk,'body_bytes':len(piece),'body':text,'encoding':encoding})
                 if len(pending)>=200:persist()
+            if tty and position<old_bytes:raise EngineError('TTY prefix rotated before archive could resume')
             persist()
-            # Advance even on empty windows; never advance before the entire response is durable.
-            atomic_json(path,{'window':{'until':end}})
+            next_cursor={'window':{'until':end},'partials':next_partials}
+            if tty and position and last_byte!=b'\n':
+                next_cursor['tty_open']={'ns':first_ns,'bytes':position,'sha256':full_hash.hexdigest()}
+            # Preserve unfinished partial timestamps: Docker can append later chunks with the same old timestamp.
+            atomic_json(path,next_cursor)
         finally:conn.close()

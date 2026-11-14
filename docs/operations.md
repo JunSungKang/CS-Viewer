@@ -33,3 +33,7 @@ outbox는 기본 1GiB의 제한된 파일 대기열이다. 기록 확인 전 삭
 Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 기록을 backfill하지 않는다. 회전·삭제된 원본과 파일에만 남긴 앱 로그는 복원하지 못한다. TTY는 stdout/stderr가 이미 합쳐진 tty 스트림이다. TTY의 body는 Docker가 붙인 시각을 포함한 구간 원문이며, 조각은 chunk 순서로 결합한다. event_time은 해당 구간 첫 Docker 시각이고 본문 속 개별 시각도 보존한다. 완료한 구간만 offset을 전진하여 조용한 스트림의 과거를 반복 조회하지 않는다. 수집기를 장기간 중단하면 Docker 보관 기간을 넘는 공백이 생길 수 있으므로 오류와 대기열을 확인한다.
 
 단일 host writer와 공유 flock이 제어 직렬화를 담당한다. 재시작 전 pending은 unknown으로 표시하고 재실행하지 않는다. DB 장애 동안 최신 수집은 계속하지만 제어 intent를 저장하지 못하면 제어는 거부한다. 단일 디스크 보관은 외부 백업·복제 보장을 대신하지 않는다.
+
+긴 행의 미완료 partial은 Docker가 같은 과거 시각으로 후속 조각을 기록할 수 있으므로 해당 시각과 이미 보관한 occurrence를 유지해 재개합니다. TTY 미완료 구간은 원문 prefix 길이와 SHA256을 대조한 뒤 증가분만 보관합니다. 원본 회전으로 prefix가 달라지면 조용히 건너뛰지 않고 오류로 표시합니다. 열린 긴 행이 오래 지속되면 해당 원본의 재독 비용이 늘 수 있습니다.
+
+원문 조회 결과는 rows, start, end, next_cursor를 포함합니다. 다음 페이지는 같은 --module/--start/--end와 --cursor 값을 사용합니다. 반환 용량을 넘는 큰 조각에서는 page_limit을 자동으로 낮춥니다. TTY chunk는 바이트 위치이며 body_bytes는 인코딩 전 길이입니다.

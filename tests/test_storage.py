@@ -8,11 +8,12 @@ import unittest
 from unittest.mock import patch
 import uuid
 import contextlib
+import threading
 from backend import admin
 
 from backend.clickhouse import StorageError, timestamp
 from backend.logs import Collector, frames, decode_record
-from backend.schema import years, definitions
+from backend.schema import years, definitions, retention_status
 from backend.spool import Spool
 from backend.store import Store
 from test_core import MemoryClient
@@ -149,6 +150,65 @@ class StorageTests(unittest.TestCase):
             with patch('backend.logs.time.time',return_value=100):collector.collect(cid,'owned',{'module':'test','role':'web'})
             with patch('backend.logs.time.time',return_value=110):collector.collect(cid,'owned',{'module':'test','role':'web'})
         self.assertIn('since=99.000000001',requests[1])
+
+    def test_delayed_partials_with_old_timestamps_are_not_lost(self):
+        for tty in (False,True):
+            folder=self.path/('tty' if tty else 'plain')
+            cid='a'*64;prefix=b'1970-01-01T00:00:02.123456789Z '
+            first=prefix+b'first';tail=prefix+b'last\n';requests=[]
+            def frame(body):return b'\x01\0\0\0'+struct.pack('>I',len(body))+body
+            responses=[first,first+tail] if tty else [frame(first),frame(first)+frame(tail)]
+            class Response(io.BytesIO):status=200
+            class Connection:
+                def __init__(self,*a):pass
+                def request(self,method,path):requests.append(path)
+                def getresponse(self):return Response(responses.pop(0))
+                def close(self):pass
+            engine=unittest.mock.Mock(path='test',prefix='/v1.51')
+            engine.inspect.return_value={'Id':cid,'Name':'/owned','Config':{'Tty':tty}}
+            captured=[]
+            sink=unittest.mock.Mock();sink.enqueue.side_effect=lambda kind,rows:captured.extend(rows)
+            collector=Collector(engine,sink,{},folder);collector.cutover=0
+            with patch('backend.logs.UnixConnection',Connection):
+                with patch('backend.logs.time.time',return_value=100):collector.collect(cid,'owned',{'module':'test','role':'web'})
+                with patch('backend.logs.time.time',return_value=110):collector.collect(cid,'owned',{'module':'test','role':'web'})
+            self.assertIn('since=2.123456789',requests[1])
+            actual=b''.join(row['body'].encode() for row in captured)
+            self.assertEqual(actual,first+tail if tty else b'firstlast\n')
+            state=json.loads((folder/(cid+'.json')).read_text())
+            self.assertFalse(state.get('partials'));self.assertNotIn('tty_open',state)
+
+    def test_conditional_short_ttl_is_not_accepted(self):
+        client=unittest.mock.Mock(database='test')
+        client.query.return_value=b"CREATE TABLE x (received_at DateTime64(0)) ENGINE=MergeTree ORDER BY tuple() TTL received_at + toIntervalYear(3) DELETE WHERE module != 'short', received_at + toIntervalDay(1) DELETE WHERE module='short' SETTINGS index_granularity=8192"
+        self.assertEqual(set(retention_status(client).values()),{None})
+
+    def test_size_failure_does_not_escape_archive_loop(self):
+        store=Store({},self.path,client=MemoryClient())
+        with patch.object(store.spool,'size',side_effect=OSError('filesystem')):
+            store.flush()
+        self.assertIsNotNone(store.status()['error'])
+
+    def test_size_enqueue_and_acknowledgement_can_run_concurrently(self):
+        spool=Spool(self.path);done=threading.Event();errors=[];written=[]
+        def producer():
+            try:
+                for i in range(100):spool.enqueue('container_logs',[{'n':i}])
+            except Exception as exc:errors.append(exc)
+            finally:done.set()
+        def consumer():
+            try:
+                while not done.is_set() or list(self.path.glob('*.pending')):
+                    batch=spool.prepare()
+                    if batch:written.extend(row['n'] for row in batch[1]);spool.acknowledge()
+            except Exception as exc:errors.append(exc)
+        producer_thread=threading.Thread(target=producer);consumer_thread=threading.Thread(target=consumer)
+        producer_thread.start();consumer_thread.start()
+        while producer_thread.is_alive() or consumer_thread.is_alive():
+            try:spool.size()
+            except Exception as exc:errors.append(exc)
+        producer_thread.join();consumer_thread.join()
+        self.assertFalse(errors);self.assertEqual(sorted(written),list(range(100)))
 
     def test_failed_container_does_not_stop_other_log_sources(self):
         engine=unittest.mock.Mock()

@@ -47,7 +47,12 @@ class Store:
             except (StorageError,OSError,ValueError):
                 with self.lock:self.storage['error']='ClickHouse 저장 지연 또는 보존 정책 오류'
             finally:
-                with self.lock:self.storage['backlog_bytes']=self.spool.size()
+                try:
+                    size=self.spool.size()
+                except OSError:
+                    size=None
+                    with self.lock:self.storage['error']='Outbox filesystem unavailable'
+                with self.lock:self.storage['backlog_bytes']=size
 
     def hydrate(self):
         if self.hydrated:return

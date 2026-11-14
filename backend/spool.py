@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -28,7 +29,7 @@ class Spool:
 
     def _names(self, manifest):
         names = manifest['files']
-        if not isinstance(names,list) or any(not isinstance(n,str) or Path(n).name != n or not n.endswith('.pending') for n in names):
+        if not isinstance(names,list) or any(not isinstance(n,str) or Path(n).name != n or not re.fullmatch(r'[0-9]{20}-[0-9a-f]{32}\.pending',n) for n in names):
             raise ValueError('Invalid outbox manifest')
         return names
 
@@ -37,10 +38,12 @@ class Spool:
         if ack.exists():
             for name in self._names(json.loads(ack.read_text())): (self.path/name).unlink(missing_ok=True)
             ack.unlink()
-        for p in self.path.glob('*.tmp'): p.unlink()
+        for p in self.path.glob('*.tmp'):
+            if re.fullmatch(r'(?:[0-9]{20}-[0-9a-f]{32}\.pending|inflight\.json|acked\.json)\.[0-9a-f]{32}\.tmp',p.name):p.unlink()
 
     def size(self):
-        return sum(p.stat().st_size for p in self.path.iterdir() if p.is_file())
+        with self.lock:
+            return sum(p.stat().st_size for p in self.path.iterdir() if p.is_file())
 
     def enqueue(self, kind, rows):
         if not rows: return

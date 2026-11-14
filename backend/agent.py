@@ -306,6 +306,9 @@ def load_config(path):
         if not destination.is_relative_to(root):
             raise ValueError(key + ' must stay in the workspace')
     config['clickhouse'] = json.loads(Path(config['clickhouse_config']).read_text())
+    for key, minimum, maximum in (('interval',5,3600),('flush_seconds',1,300),('log_poll_seconds',1,300),('spool_limit_bytes',1048576,10737418240)):
+        if key in config and (type(config[key]) is not int or not minimum<=config[key]<=maximum):
+            raise ValueError('Invalid background worker setting: '+key)
     for service in config['services']:
         if not all(isinstance(service.get(key), str) and re.fullmatch('[a-z0-9]+(?:-[a-z0-9]+)*', service[key]) for key in ('module', 'role', 'name')):
             raise ValueError('Invalid service metadata')
@@ -321,6 +324,10 @@ def main():
     parser.add_argument('--config', required=True)
     args = parser.parse_args()
     config = load_config(args.config)
+    lease_path = Path(config['spool_path']).parent / 'collector.lock'
+    lease_path.parent.mkdir(parents=True, exist_ok=True)
+    lease = lease_path.open('a+')
+    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
     agent = Agent(config)
     def loop():
         while True:
@@ -329,11 +336,17 @@ def main():
     agent.log_collector = Collector(agent.engine, agent.store, agent.aliases, config['log_state_path'], config['daemon_id'])
     def archive_loop():
         while True:
-            agent.store.flush()
+            try:
+                agent.store.flush()
+            except Exception:
+                with agent.store.lock:agent.store.storage['error']='Archive worker failed; retrying'
             time.sleep(config.get('flush_seconds', 30))
     def log_loop():
         while True:
-            agent.log_collector.poll()
+            try:
+                agent.log_collector.poll()
+            except Exception:
+                agent.log_collector.error='Log worker failed; retrying'
             time.sleep(config.get('log_poll_seconds', 10))
     threading.Thread(target=archive_loop, daemon=True).start()
     threading.Thread(target=log_loop, daemon=True).start()

@@ -18,7 +18,7 @@ def definitions(database, retention=None, codec='ZSTD(1)'):
         running UInt16, total UInt16, restarts UInt64, oom_history Bool, unhealthy Bool, cpu_percent Nullable(Float64), memory_bytes Nullable(UInt64)""",
       'container_logs': """event_time DateTime64(9,'UTC') CODEC(Delta,{c}), received_at DateTime64(0,'UTC') CODEC(Delta,{c}), batch_id UUID,
         module LowCardinality(String), role LowCardinality(String), container_name LowCardinality(String), container_id FixedString(64),
-        stream Enum8('stdout'=1,'stderr'=2,'tty'=3), record_id FixedString(32), occurrence UInt32, chunk UInt32,
+        stream Enum8('stdout'=1,'stderr'=2,'tty'=3), record_id FixedString(32), occurrence UInt32, chunk UInt64, body_bytes UInt32 DEFAULT 0,
         body String, encoding Enum8('utf8'=1,'base64'=2)""",
       'action_events': """request_id UUID, event_sequence UInt8, received_at DateTime64(0,'UTC') CODEC(Delta,{c}), started_at Float64,
         instance_id UUID, fingerprint FixedString(64), actor LowCardinality(String), target FixedString(64),
@@ -44,7 +44,9 @@ def retention_status(client):
     result = {}
     for table in TABLES:
         sql = client.query('SHOW CREATE TABLE ' + client.database + '.' + table).decode()
-        match = re.search(r'TTL\s+received_at\s*\+\s*toIntervalYear\((\d+)\)', sql)
+        sql=sql.replace(r'\n',' ').replace(r'\t',' ').strip()
+        clause=re.search(r'\bTTL\s+(.*?)(?:\s+SETTINGS\b|$)',sql,re.S)
+        match=re.fullmatch(r'received_at\s*\+\s*toIntervalYear\((\d+)\)(?:\s+DELETE)?',clause[1].strip()) if clause else None
         result[table] = int(match[1]) if match else None
     return result
 

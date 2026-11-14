@@ -7,7 +7,9 @@ import re
 from urllib.parse import urlencode, urlsplit
 
 class StorageError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code=code
 
 def timestamp(ns):
     sec, fraction = divmod(ns, 1000000000)
@@ -32,8 +34,10 @@ class Client:
         try:
             conn.request('POST', '/?' + urlencode(options), body=data or b'', headers={'Authorization': 'Basic ' + auth})
             response = conn.getresponse(); body = response.read(4 * 1024 * 1024 + 1)
-            if response.status != 200 or len(body) > 4 * 1024 * 1024 or re.search(rb'(?:^|\n)Code: [0-9]+\.',body):
-                raise StorageError('ClickHouse request failed (HTTP %s)' % response.status)
+            if len(body)>4*1024*1024:raise StorageError('ClickHouse response limit exceeded',-1)
+            if response.status != 200 or re.search(rb'(?:^|\n)Code: [0-9]+\.',body):
+                match=re.search(rb'(?:^|\n)Code: ([0-9]+)\.',body)
+                raise StorageError('ClickHouse request failed (HTTP %s)' % response.status, int(match[1]) if match else None)
             return body
         except (OSError, http.client.HTTPException) as exc:
             raise StorageError('ClickHouse connection failed') from exc
