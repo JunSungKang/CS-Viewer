@@ -15,7 +15,7 @@
         "mailbox-webmail-ui"
       ],
       "port_labels": {
-        "3000/tcp": {"title": "웹메일", "kind": "http", "detail": "웹 애플리케이션 접속"}
+        "3000/tcp": {"title": "Webmail", "kind": "http", "detail": "Web application access"}
       }
     }
   ],
