@@ -119,7 +119,7 @@ Monitor storage errors, log errors, and queued bytes. A full outbox or filesyste
 
 ## Docker log collection and resume
 
-The collector reads the Docker logs API for the registered inventory, including readable `local` and `json-file` logging drivers. Collection starts at the collector's initial cutover time; it does not backfill earlier output. Application logs written only to files are outside this collection path.
+The collector reads the Docker logs API for the registered inventory, including readable `local` and `json-file` logging drivers. It persists one initial cutover timestamp in `origin.json` in the log state directory and does not backfill output before that timestamp. A container added later without a saved cursor uses the same original cutover, so retained output from before its inventory registration may be collected. Application logs written only to files are outside this collection path.
 
 Offsets are persisted after durable enqueue. Completed polling windows advance the cursor even for quiet streams, avoiding repeated historical reads. Source logs that Docker has already rotated or deleted cannot be recovered. A collector outage longer than Docker's own log retention can leave gaps, so monitor both source retention and collector health.
 
