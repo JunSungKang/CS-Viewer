@@ -141,7 +141,11 @@ class Agent:
         ports = []
         for target, bindings in (raw.get('NetworkSettings', {}).get('Ports') or raw.get('HostConfig', {}).get('PortBindings') or {}).items():
             for binding in bindings or []:
-                ports.append({'host': binding.get('HostIp', ''), 'port': binding.get('HostPort', ''), 'container': target})
+                port = {'host': binding.get('HostIp', ''), 'port': binding.get('HostPort', ''), 'container': target}
+                label = service.get('port_labels', {}).get(target)
+                if label:
+                    port['label'] = dict(label)
+                ports.append(port)
         result = {'id': raw['Id'], 'name': name, 'display_name': service['name'], 'module': service['module'],
                   'role': service['role'], 'critical': service.get('critical') is True,
                   'state': state.get('Status'), 'health': (state.get('Health') or {}).get('Status'),
@@ -315,6 +319,25 @@ def load_config(path):
             raise ValueError('Critical flag must be a JSON boolean')
         if not isinstance(service.get('names'), list) or not service['names'] or any(not isinstance(name, str) or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9_.-]*', name) for name in service['names']):
             raise ValueError('Invalid container inventory names')
+        labels = service.get('port_labels', {})
+        if not isinstance(labels, dict):
+            raise ValueError('Invalid port display labels')
+        for listener, label in labels.items():
+            match = re.fullmatch(r'([1-9][0-9]{0,4})/(tcp|udp|sctp)', listener) if isinstance(listener, str) else None
+            if not match or int(match[1]) > 65535 or not isinstance(label, dict):
+                raise ValueError('Invalid port display label')
+            if (set(label) - {'title', 'kind', 'group', 'detail', 'redirect_to'}
+                    or not isinstance(label.get('title'), str) or not 1 <= len(label['title']) <= 80 or not label['title'].strip()
+                    or label.get('kind', 'other') not in ('http', 'https', 'redirect', 'other')
+                    or label.get('group', 'service') not in ('entry', 'service')
+                    or not isinstance(label.get('detail', ''), str) or len(label.get('detail', '')) > 240):
+                raise ValueError('Invalid port display label')
+            if label.get('kind') == 'redirect':
+                target = label.get('redirect_to')
+                if type(target) is not int or not 1 <= target <= 65535:
+                    raise ValueError('Invalid redirect display port')
+            elif 'redirect_to' in label:
+                raise ValueError('Redirect display port requires redirect kind')
     return config
 
 

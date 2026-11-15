@@ -32,6 +32,56 @@ function boardPorts(containers){
   }
   return [...groups].map(([host,pairs])=>el('div',{},host+' · '+[...pairs.values()].sort((a,b)=>a.port-b.port).map(pair=>pair.text).join(' · ')));
 }
+function publishedPorts(containers){
+  const bindings=new Map();
+  for(const container of containers)for(const port of container.ports){
+    bindings.set(JSON.stringify([container.name,port.host,port.port,port.container]),{...port,owner:container.name});
+  }
+  return [...bindings.values()];
+}
+function portDirectory(bindings){
+  const hosts=new Map();
+  for(const port of bindings){
+    const key=JSON.stringify([port.owner,port.host]);
+    if(!hosts.has(key))hosts.set(key,[]);
+    hosts.get(key).push(port);
+  }
+  return el('div',{class:'port-directory','aria-label':'접속 포트 안내'},
+    el('p',{class:'port-guide'},'접속 포트와 자동 이동 관계를 용도별로 표시합니다.'),
+    [...hosts.values()].map(ports=>{
+      const host=ports[0].host,local=host==='::1'||/^127(?:\.\d{1,3}){3}$/.test(host);
+      const address=host.includes(':')?'['+host+']':host||'기본 바인딩';
+      const sections=local?[['internal','이 컴퓨터 전용']]:[['entry','공통 진입'],['service','서비스 접속']];
+      return el('section',{class:'port-host'},
+        el('div',{class:'port-host-heading'},el('span',{},local?'로컬 바인딩':'호스트 바인딩'),el('strong',{class:'mono'},address)),
+        sections.map(([group,title])=>{
+          const members=ports.filter(port=>local||(port.label?.group||'service')===group),rows=new Map();
+          for(const port of members){
+            const target=port.label?.kind==='redirect'?members.find(other=>other.port===String(port.label.redirect_to)
+              &&other.container.split('/')[1]===port.container.split('/')[1]&&other.label?.title===port.label.title&&other.label?.kind!=='redirect'):null;
+            const canonical=target||port,key=JSON.stringify([canonical.port,canonical.container]);
+            if(!rows.has(key))rows.set(key,[]);
+            rows.get(key).push(port);
+          }
+          if(!rows.size)return null;
+          return el('section',{class:'port-section port-section-'+group},el('h3',{},title),
+            el('div',{class:'port-rows'},[...rows.values()].sort((a,b)=>Number((a.find(p=>p.label?.kind!=='redirect')||a[0]).port)-Number((b.find(p=>p.label?.kind!=='redirect')||b[0]).port)).map(entries=>{
+              const primary=entries.find(port=>port.label?.kind!=='redirect')||entries[0];
+              const details=[...new Set(entries.map(port=>port.label?.detail).filter(Boolean))];
+              const ordered=[primary,...entries.filter(port=>port!==primary)];
+              return el('div',{class:'port-row'},
+                el('div',{class:'port-description'},el('strong',{class:'port-name'},primary.label?.title||'용도 미등록'),details.length?el('p',{},details.join(' · ')):null),
+                el('div',{class:'port-values'},ordered.map(port=>{
+                  const kind=port.label?.kind,transport=port.container.split('/')[1].toUpperCase();
+                  const text=kind==='redirect'?`이동 :${port.port} → :${port.label.redirect_to}`:`${kind==='https'?'HTTPS':kind==='http'?'HTTP':transport} :${port.port}`;
+                  const mapped=port.port!==port.container.split('/')[0]||!port.label;
+                  return el('div',{class:'port-value'},el('span',{class:'port-chip'+(kind==='redirect'?' port-chip-redirect':'')},text),
+                    mapped?el('small',{class:'port-mapping'},`호스트 :${port.port} → 컨테이너 ${port.container.toUpperCase()}`):null);
+                })));
+            })));
+        }));
+    }),el('p',{class:'port-source'},'접속 숫자는 호스트 포트 기준 · 포트는 Docker 현재 바인딩, 용도는 운영 설정 기준'));
+}
 function label(container){return container.health==='unhealthy'?'헬스 이상':container.state!=='running'?'중지':container.health==='healthy'?'헬스 정상':'실행 중';}
 function stale(){return !state.data?.collected_at || Boolean(state.data.error) || Date.now()/1000-state.data.collected_at>Math.max(45,(state.data.interval||10)*3);}
 async function api(path,body,timeout=8000){
@@ -73,16 +123,27 @@ function renderBoard(){
     infra('Docker VM 메모리',bytes(daemon.memory_total),`컨테이너 사용 합계 ${bytes(members.reduce((n,c)=>n+(c.memory_bytes||0),0))} · VM 총량과 구분`),
     infra('공통 인프라',`${members.filter(c=>c.state==='running').length} / ${members.length} 실행`,
       '관리 대상 · PostgreSQL '+(postgres?label(postgres)+' · '+ports(postgres):'조회 불가')+' · ClickHouse '+(clickhouse?label(clickhouse):'조회 불가')));
-  const services=[...(d.services||[])].sort((a,b)=>Number(Boolean(b.error))-Number(Boolean(a.error))||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
+  const directoryPorts=new Map((d.services||[]).map(service=>{
+    const bindings=publishedPorts(members.filter(container=>container.module===service.module));
+    const listeners=new Set(bindings.map(port=>JSON.stringify([port.owner,port.port,port.container])));
+    return [service.module,listeners.size>4||bindings.some(port=>port.label)?bindings:null];
+  }));
+  const services=[...(d.services||[])].sort((a,b)=>Number(Boolean(b.error))-Number(Boolean(a.error))
+    ||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
   put('#services',services.length?services.map(s=>{
     const history=d.trends?.[s.module]||[],containers=members.filter(c=>c.module===s.module);
     const status=s.unhealthy?'헬스 이상':s.oom_history?'OOM 이력':s.error?s.error:s.running<s.total?'일부 중지':s.status>=200&&s.status<300?'HTTP 정상':'HTTP '+s.status;
-    return el('article',{class:'service-card'},el('div',{class:'card-heading'},el('h2',{},s.module),badge(status,s.error||s.unhealthy?'bad':s.oom_history||s.running<s.total?'warn':s.status<300?'good':'warn')),
-      el('div',{class:'ports'},boardPorts(containers)),
+    const directory=directoryPorts.get(s.module);
+    const metrics=el('div',{class:directory?'port-card-summary':'service-summary'},
+      directory?el('p',{class:'port-metric-label'},'HTTP 상태 점검 응답'):el('div',{class:'ports'},boardPorts(containers)),
       el('div',{class:'http-value'},s.http_ms===null?'—':s.http_ms.toFixed(1),el('span',{},'ms')),
       el('div',{class:'service-timings'},el('span',{},'연결 '+(s.tcp_ms===null?'—':s.tcp_ms.toFixed(1)+' ms')),el('span',{},'최근 p95 '+p95(history))),spark(history,s.module),
       el('div',{class:'resource'},el('span',{},'CPU ',el('strong',{},s.cpu_percent===null?'—':s.cpu_percent+'%')),el('span',{},'MEM ',el('strong',{},bytes(s.memory_bytes))),el('span',{},'실행 ',el('strong',{},s.running+' / '+s.total))),
+      directory?el('p',{class:'port-metric-note'},'응답 시간은 이 모듈에 등록된 점검 주소에서 측정합니다.'):null,
       s.restarts?el('p',{class:'footnote'},'컨테이너 자동 재시작 누적 '+s.restarts+'회'+(s.oom_history?' · 메모리 부족 종료 이력':'')):null);
+    return el('article',{class:'service-card'+(directory?' service-card-ports':'')},
+      el('div',{class:'card-heading'},el('h2',{},s.module),badge(status,s.error||s.unhealthy?'bad':s.oom_history||s.running<s.total?'warn':s.status<300?'good':'warn')),
+      directory?el('div',{class:'port-card-layout'},metrics,portDirectory(directory)):metrics);
   }):el('p',{class:'empty'},'첫 측정을 수집하고 있습니다.'));
   $('#collection-status').textContent=`최종 수집 ${time(d.collected_at)} · ${d.interval||10}초 간격 · 최근 60회 / 보존 ${d.storage?.retention_years?.service_samples?d.storage.retention_years.service_samples+'년 이상':'확인 중'} · 포트: 호스트 → 내부(TCP 기본) · 빨간 점: 측정 실패 · HTTPS 연결은 TLS 포함`;
 }
