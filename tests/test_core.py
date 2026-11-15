@@ -147,6 +147,43 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn('control', self.config['services'][0])
         self.assertEqual(self.agent.action(self.request())['status'], 'succeeded')
 
+    def test_port_labels_only_annotate_published_container_listeners(self):
+        service = copy.deepcopy(self.config['services'][0])
+        label = {'title': '서비스 접속', 'kind': 'https', 'group': 'service'}
+        service['port_labels'] = {'8080/tcp': label, '9000/tcp': {'title': '미게시 포트'}}
+        result = self.agent.container({'Id': CONTAINER_ID}, service)
+        self.assertEqual(result['ports'], [{'host': '127.0.0.1', 'port': '20105', 'container': '8080/tcp', 'label': label}])
+        result['ports'][0]['label']['title'] = '변경된 표시'
+        self.assertEqual(service['port_labels']['8080/tcp']['title'], '서비스 접속')
+
+    def test_port_label_configuration_validation(self):
+        credentials = self.path / 'clickhouse.json'
+        credentials.write_text(json.dumps({'url': 'http://127.0.0.1:20140', 'user': 'test', 'password': 'test'}))
+        config = {**copy.deepcopy(self.config), 'workspace_root': str(self.path), 'spool_path': str(self.path / 'spool'),
+                  'log_state_path': str(self.path / 'offsets'), 'clickhouse_config': str(credentials)}
+        file = self.path / 'config.json'
+        valid = {'8080/tcp': {'title': '서비스 접속', 'kind': 'https'},
+                 '8081/tcp': {'title': '서비스 접속', 'kind': 'redirect', 'redirect_to': 20105}}
+        config['services'][0]['port_labels'] = valid
+        file.write_text(json.dumps(config))
+        self.assertEqual(load_config(file)['services'][0]['port_labels'], valid)
+        invalid = [[], {'0/tcp': {'title': '잘못된 포트'}}, {'65536/tcp': {'title': '범위 초과'}},
+                   {'8080/http': {'title': '잘못된 전송 방식'}}, {'8080/tcp': '설명'},
+                   {'8080/tcp': {'title': ''}}, {'8080/tcp': {'title': ' ' * 81 + 'x'}},
+                   {'8080/tcp': {'title': '서비스', 'kind': 'unknown'}},
+                   {'8080/tcp': {'title': '서비스', 'group': 'internal'}},
+                   {'8080/tcp': {'title': '서비스', 'detail': 'x' * 241}},
+                   {'8080/tcp': {'title': '서비스', 'kind': 'redirect'}},
+                   {'8080/tcp': {'title': '서비스', 'kind': 'redirect', 'redirect_to': True}},
+                   {'8080/tcp': {'title': '서비스', 'kind': 'redirect', 'redirect_to': 65536}},
+                   {'8080/tcp': {'title': '서비스', 'redirect_to': 443}}]
+        for labels in invalid:
+            with self.subTest(labels=labels):
+                config['services'][0]['port_labels'] = labels
+                file.write_text(json.dumps(config))
+                with self.assertRaises(ValueError):
+                    load_config(file)
+
     def test_stale_state_and_wrong_confirmation(self):
         self.rejected(self.request(expected_state='exited'), 409)
         self.rejected(self.request(confirmation='another-service'), 400)

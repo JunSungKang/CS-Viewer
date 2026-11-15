@@ -4,6 +4,8 @@ ClickHouse Server가 필수다. 단일 호스트 에이전트가 Docker Engine�
 
 설정 예시는 config.example.json이다. clickhouse_config, spool_path, log_state_path, lock_path는 workspace 내부 절대 경로여야 한다. 서버는 운영 환경에서 별도 컨테이너로 배포하며 데이터·설정·임시 파일·로그를 workspace에 bind mount한다. 공인 DB 포트는 열지 않는다.
 
+서비스 inventory의 선택 항목 `port_labels`는 `3000/tcp`처럼 컨테이너 수신 포트를 키로 사용한다. 값은 `title`(1~80자), 선택적인 `kind`(`http`, `https`, `redirect`, `other`), `group`(`entry`, `service`), `detail`(최대 240자)이다. `redirect`에는 호스트 측 목적지 포트인 `redirect_to`(1~65535)가 필요하다. 이 값은 표시용 설명이며 실제 라우팅을 바꾸지 않는다. 현재 Docker에 게시된 바인딩에만 결합하므로 설정만 있는 미게시 포트를 만들지 않는다. 설명이 없으면 프로토콜이나 용도를 추정하지 않고 실제 바인딩을 표시한다. localhost 전용 여부는 실제 바인딩 주소에서 판단한다.
+
 측정 수집 10초, 원문 로그 polling 10초, flush 30초가 기본이다. 화면은 최근 60회 메모리 캐시를 사용하고 재시작 시 최근 하루에서 복구한다. 과거 데이터는 DB에서 계속 보존한다. 저장 오류·로그 수집 오류·대기 용량을 별도로 표시하며 제어는 영구 intent 기록에 실패하면 실행하지 않는다.
 
 ## 보존 기간
