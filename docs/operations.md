@@ -1,43 +1,136 @@
-# 운영
+# Operations guide
 
-ClickHouse Server가 필수다. 단일 호스트 에이전트가 Docker Engine과 ClickHouse에 접근하며 웹 컨테이너는 에이전트의 제한된 API만 사용한다. 앱 계정은 SELECT/INSERT, 초기화·보존 변경은 별도 운영 계정을 사용한다. 접속 정보는 workspace 안의 비추적 JSON 파일에서 읽는다.
+This guide covers configuration, retention, log retrieval, and recovery for a single-host CS-Viewer deployment. Follow the [quick start](../README.md#quick-start) to provision the database and start the application. See [Architecture](architecture.md) for component boundaries and [Validation](validation.md) for development checks.
 
-설정 예시는 config.example.json이다. clickhouse_config, spool_path, log_state_path, lock_path는 workspace 내부 절대 경로여야 한다. 서버는 운영 환경에서 별도 컨테이너로 배포하며 데이터·설정·임시 파일·로그를 workspace에 bind mount한다. 공인 DB 포트는 열지 않는다.
+Run the commands below from the repository root with Python 3.14 or newer. The examples use the ignored `.local` directory introduced in the quick start; replace paths and module names with your own values.
 
-서비스 inventory의 선택 항목 `port_labels`는 `3000/tcp`처럼 컨테이너 수신 포트를 키로 사용한다. 값은 `title`(1~80자), 선택적인 `kind`(`http`, `https`, `redirect`, `other`), `group`(`entry`, `service`), `detail`(최대 240자)이다. `redirect`에는 호스트 측 목적지 포트인 `redirect_to`(1~65535)가 필요하다. 이 값은 표시용 설명이며 실제 라우팅을 바꾸지 않는다. 현재 Docker에 게시된 바인딩에만 결합하므로 설정만 있는 미게시 포트를 만들지 않는다. 설명이 없으면 프로토콜이나 용도를 추정하지 않고 실제 바인딩을 표시한다. localhost 전용 여부는 실제 바인딩 주소에서 판단한다.
+## Deployment and credentials
 
-측정 수집 10초, 원문 로그 polling 10초, flush 30초가 기본이다. 화면은 최근 60회 메모리 캐시를 사용하고 재시작 시 최근 하루에서 복구한다. 과거 데이터는 DB에서 계속 보존한다. 저장 오류·로그 수집 오류·대기 용량을 별도로 표시하며 제어는 영구 intent 기록에 실패하면 실행하지 않는다.
+ClickHouse Server is required and must be provisioned separately. The host agent accesses the selected Docker Engine and ClickHouse; the web service calls only the agent's limited API. Do not give the web container database credentials or the Docker socket.
 
-## 보존 기간
+Use a ClickHouse application account with `SELECT` and `INSERT` access to the application database. Keep a separate administrator account for initialization and retention changes. Store connection details in untracked JSON files inside the configured workspace, with file permissions restricted to the operating user.
 
-측정·원문·제어 이벤트 각각 기본 3년이다. 3~100년의 정수로 설정한다. 기간은 달력상의 YEAR이며 수신 시각 기준이다. 월 파티션/part 단위 만료로 일부 기록은 기간보다 오래 남는다. 관리자 명령은 서버의 실제 TTL을 확인한다.
+Keep ClickHouse reachable through a private or otherwise protected connection. For a containerized database, provide persistent storage and manage its data, configuration, temporary files, and logs explicitly. The repository does not provide the operator's database container, credentials, or backup service.
+
+CS-Viewer has no built-in web authentication or role-based access control. Anyone who can reach the web service can inspect the managed inventory and request lifecycle actions. Use loopback for local evaluation, or an authenticated reverse proxy or another trusted access boundary for shared deployments. TLS termination and certificate renewal are deployment responsibilities.
+
+## Agent configuration
+
+Start with [config.example.json](config.example.json) and the [configuration instructions](../README.md#3-configure-the-host-agent). Replace its inventory, image references, socket, daemon identity, and paths with values from your own environment.
+
+`clickhouse_config`, `spool_path`, `log_state_path`, and `lock_path` must resolve inside `workspace_root`; use absolute paths. Run one agent for a given state directory. Deployment tools that manage the same containers must share the configured operations lock and preserve its inode rather than replacing the lock file.
+
+The default collection settings are:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `interval` | 10 seconds | Collect service measurements and current inventory. |
+| `log_poll_seconds` | 10 seconds | Poll registered containers' Docker logs. |
+| `flush_seconds` | 30 seconds | Flush queued metrics and logs to ClickHouse. |
+| `spool_limit_bytes` | 1 GiB | Bound the durable file outbox. |
+
+The dashboard keeps the most recent 60 measurements per module in memory. When ClickHouse is available after restart, it restores up to 60 measurements per module from the preceding day. This display window does not limit the history retained in ClickHouse. Storage errors, log collection errors, and queued bytes are reported separately.
+
+### Port display labels
+
+Each service inventory entry may contain a `port_labels` object. Its keys identify **container listeners**, such as `3000/tcp`, rather than published host ports. A key must use a port from 1 to 65535 and one of `tcp`, `udp`, or `sctp`.
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `title` | Required, nonblank string of 1–80 characters. | Human-readable service or listener name. |
+| `kind` | `http`, `https`, `redirect`, or `other`; defaults to `other`. | Declared purpose of this listener. |
+| `group` | `entry` or `service`; defaults to `service`. | Public directory section. |
+| `detail` | Optional string of up to 240 characters. | Additional operational explanation. |
+| `redirect_to` | Integer from 1 to 65535, required only for `redirect`. | Destination **host port**, not a container listener number. |
+
+Unknown fields and a `redirect_to` value on a non-redirect label are rejected. Labels describe existing behavior; they do not configure listeners, redirects, TLS, or firewall rules.
+
+The agent attaches labels only to bindings currently published by Docker. Adding a label cannot create a port entry. The dashboard groups a redirect with its observed destination when the owner, binding address, transport, title, and section agree. Without matching metadata, it preserves the actual binding rather than guessing an application protocol or purpose from a port number. Host-only access is determined from the actual loopback binding address, not from a label.
+
+## Retention policy
+
+All three tables default to three calendar years:
+
+| Table | Data |
+| --- | --- |
+| `service_samples` | Typed service measurements. |
+| `container_logs` | Raw Docker logs and their source metadata. |
+| `action_events` | Append-only lifecycle intent and result events. |
+
+The administration CLI accepts an integer retention period from **3 to 100 years** for each table. Expiration uses `received_at`, the time CS-Viewer received the record, with calendar-year arithmetic. Monthly partitions and whole-part expiration can retain records longer than the configured minimum; the policy is not a precise per-row deletion deadline.
+
+Inspect the actual server policy, preview a change, and apply it explicitly:
 
 ```sh
-python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json status
-python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json retention --table container_logs --years 5
-python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/admin.json retention --table container_logs --years 5 --apply
+python3.14 -B -m backend.admin --credentials .local/clickhouse-admin.json status
+python3.14 -B -m backend.admin --credentials .local/clickhouse-admin.json retention --table container_logs --years 5
+python3.14 -B -m backend.admin --credentials .local/clickhouse-admin.json retention --table container_logs --years 5 --apply
 ```
 
-첫 명령은 상태, 두 번째는 영향 미리보기, 세 번째는 적용이다. 축소 전에도 반드시 미리보기를 확인한다. 이미 삭제된 데이터는 기간 확대로 복원되지 않는다. 설정을 바꿔도 즉각적인 전체 TTL materialization을 실행하지 않는다. 시작할 때 TTL을 자동으로 단축하지 않는다. 3년 미만의 직접 서버 변경은 저장 오류로 표시한다.
+The preview reports the old and proposed periods and the number of rows already eligible under the proposed policy. Review it before shortening retention. A longer period cannot restore deleted data.
 
-## 원문 조회
+The CLI changes TTL without immediately materializing it across the full table. The agent reads the server's actual TTL and does not shorten an expanded policy on restart. An unrecognized policy or a direct server change below three years is reported as a storage error.
+
+## Retrieve raw logs
+
+Raw logs are available through the local administration CLI using ClickHouse credentials. The web service does not expose a raw-log retrieval endpoint.
 
 ```sh
-python3 -B -m backend.admin --credentials /workspace/operations/clickhouse/app.json logs --module mailbox --limit 100
+python3.14 -B -m backend.admin --credentials .local/clickhouse-app.json logs --module your-module --limit 100
 ```
 
-기본 최근 15분이며 --start/--end에는 시간대가 있는 ISO 시각을 준다. 최대 31일/1,000행/2MiB/5초다. 공개 웹 원문 endpoint는 없다. body와 encoding으로 바이트를 복원한다. 큰 레코드는 같은 record_id의 chunk 순서로 결합한다. 동일 내용의 반복 발생은 occurrence로 구분한다.
+The default interval is the last 15 minutes. For a stable, repeatable range, provide timezone-qualified ISO timestamps:
 
-## 장애와 복구
+```sh
+python3.14 -B -m backend.admin --credentials .local/clickhouse-app.json logs \
+  --module your-module \
+  --start 2026-01-01T00:00:00Z --end 2026-01-01T00:15:00Z \
+  --limit 100
+```
 
-outbox는 기본 1GiB의 제한된 파일 대기열이다. 기록 확인 전 삭제하지 않는다. 전송은 at-least-once이며 불확정 응답 재시도 시 중복 가능성이 있다. 고정 batch token과 레코드 ID를 사용하며 중복 제거 창은 유한하다. 원문 조회는 record_id/chunk로 식별 가능한 중복을 접는다. 운영 데이터의 정확한 분석 집계에서는 이 특성을 고려한다.
+A query range must be positive and at most 31 days. `--limit` accepts 1–1,000 rows. Each page is bounded to 2 MiB of serialized JSON. The CLI applies a five-second ClickHouse execution setting to each query and may retry with a smaller page size; this is not a five-second deadline for the whole command.
 
-Docker의 local/json-file 로그를 API로 읽는다. 전환 시각 이전의 기록을 backfill하지 않는다. 회전·삭제된 원본과 파일에만 남긴 앱 로그는 복원하지 못한다. TTY는 stdout/stderr가 이미 합쳐진 tty 스트림이다. TTY의 body는 Docker가 붙인 시각을 포함한 구간 원문이며, 조각은 chunk 순서로 결합한다. event_time은 해당 구간 첫 Docker 시각이고 본문 속 개별 시각도 보존한다. 완료한 구간만 offset을 전진하여 조용한 스트림의 과거를 반복 조회하지 않는다. 수집기를 장기간 중단하면 Docker 보관 기간을 넘는 공백이 생길 수 있으므로 오류와 대기열을 확인한다.
+The JSON response contains `start`, `end`, `page_limit`, `rows`, and `next_cursor`. When a cursor is returned, request the next page with the same module and explicit start/end values:
 
-단일 host writer와 공유 flock이 제어 직렬화를 담당한다. 재시작 전 pending은 unknown으로 표시하고 재실행하지 않는다. DB 장애 동안 최신 수집은 계속하지만 제어 intent를 저장하지 못하면 제어는 거부한다. 단일 디스크 보관은 외부 백업·복제 보장을 대신하지 않는다.
+```sh
+python3.14 -B -m backend.admin --credentials .local/clickhouse-app.json logs \
+  --module your-module \
+  --start 2026-01-01T00:00:00Z --end 2026-01-01T00:15:00Z \
+  --limit 100 --cursor 'replace-with-next_cursor'
+```
 
-긴 행의 미완료 partial은 Docker가 같은 과거 시각으로 후속 조각을 기록할 수 있으므로 해당 시각과 이미 보관한 occurrence를 유지해 재개합니다. TTY 미완료 구간은 원문 prefix 길이와 SHA256을 대조한 뒤 증가분만 보관합니다. 원본 회전으로 prefix가 달라지면 조용히 건너뛰지 않고 오류로 표시합니다. 열린 긴 행이 오래 지속되면 해당 원본의 재독 비용이 늘 수 있습니다.
+The effective `page_limit` may be lower than the requested limit when large chunks would exceed the response bound. A full page can produce a cursor even if the next page is empty.
 
-원문 조회 결과는 rows, start, end, next_cursor를 포함합니다. 다음 페이지는 같은 --module/--start/--end와 --cursor 값을 사용합니다. 반환 용량을 넘는 큰 조각에서는 page_limit을 자동으로 낮춥니다. TTY chunk는 바이트 위치이며 body_bytes는 인코딩 전 길이입니다.
+### Reconstructing bytes and records
 
-non-TTY의 열린 partial도 이미 보관한 조각 수와 prefix SHA256을 함께 검증합니다. 회전으로 prefix가 바뀌거나 부족해지면 새 조각을 과거 조각으로 오인해 건너뛰지 않고 오류를 표시하며 cursor를 전진하지 않습니다. 페이지 한도는 최종 JSON 직렬화 결과에도 적용합니다.
+Decode each row's `body` according to `encoding`: `utf8` contains text, while `base64` preserves non-UTF8 bytes. `body_bytes` is the length before encoding. Large records are split into identifiable chunks; group by `record_id` and order by `chunk` when reconstructing them.
+
+For non-TTY output, `chunk` is a numeric chunk index. Repeated occurrences at the same timestamp are distinguished by stored occurrence metadata and record identity; the current CLI response does not include the `occurrence` column.
+
+Docker has already combined stdout and stderr for a TTY container, so its rows use the `tty` stream. TTY bodies preserve the timestamped bytes returned by Docker, including timestamps embedded in the body. Their `event_time` is the first Docker timestamp in the collected segment, and `chunk` is a byte offset within that segment.
+
+## Delivery guarantees and the outbox
+
+The durable outbox stores pending metrics and logs as bounded files and retains them until acknowledgement. It defaults to 1 GiB. Stable batch tokens and record IDs make retries identifiable, but delivery is **at least once** and the database deduplication window is finite. An uncertain response followed by a later retry can therefore produce duplicates.
+
+The raw-log CLI collapses identifiable duplicate `record_id`/`chunk` pairs. Account for the delivery model when writing analytical queries that require exact counts; do not treat ClickHouse sorting keys as uniqueness constraints.
+
+Monitor storage errors, log errors, and queued bytes. A full outbox or filesystem failure is surfaced as an error instead of silently discarding unacknowledged files. Recent state collection can continue during a database outage, but archival progress depends on available queue capacity and eventual database recovery.
+
+## Docker log collection and resume
+
+The collector reads the Docker logs API for the registered inventory, including readable `local` and `json-file` logging drivers. Collection starts at the collector's initial cutover time; it does not backfill earlier output. Application logs written only to files are outside this collection path.
+
+Offsets are persisted after durable enqueue. Completed polling windows advance the cursor even for quiet streams, avoiding repeated historical reads. Source logs that Docker has already rotated or deleted cannot be recovered. A collector outage longer than Docker's own log retention can leave gaps, so monitor both source retention and collector health.
+
+Open partial records need special handling because Docker may append later fragments using the same earlier timestamp. The collector retains that timestamp and the already archived occurrence count. For non-TTY partial records, it verifies the stored fragment count and prefix SHA-256 before skipping previously archived fragments. For open TTY segments, it compares the archived prefix length and SHA-256 and stores only new bytes.
+
+If rotation changes or truncates a required prefix, the collector reports an error and does not advance the cursor past an unsafe resume point. It does not silently assume that new fragments are old data. Long-lived open records can increase source reread costs while they remain incomplete.
+
+## Lifecycle actions and recovery
+
+A single host writer and a shared file lock serialize lifecycle controls. The agent validates the target identity and expected state and must record a durable intent in ClickHouse before invoking Docker. If that write fails, it rejects the action even if current telemetry remains available.
+
+After an agent restart, a pending action from the previous process instance is reported as `unknown` and is not replayed automatically. Inspect the actual container state before deciding on another action. Request idempotency prevents a retry from blindly executing the same request again; it does not make an uncertain Docker result knowable.
+
+Keep the outbox, log offsets, configuration, and shared lock consistent across upgrades and restarts. Do not clear pending state as a substitute for diagnosing an error. Database retention on a single disk is not a backup or replication guarantee; plan and validate external recovery separately.
