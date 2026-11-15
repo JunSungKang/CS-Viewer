@@ -28,3 +28,4 @@ jobs:
           python-version: '3.14'
       - run: python -B -m unittest discover -s tests -v
       - run: node --check web/app.js
+      - run: node tests/test_ports.js

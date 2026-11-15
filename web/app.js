@@ -129,7 +129,7 @@ function renderBoard(){
     return [service.module,listeners.size>4||bindings.some(port=>port.label)?bindings:null];
   }));
   const services=[...(d.services||[])].sort((a,b)=>Number(Boolean(b.error))-Number(Boolean(a.error))
-    ||Number(Boolean(directoryPorts.get(a.module)))-Number(Boolean(directoryPorts.get(b.module)))||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
+    ||(b.http_ms??Infinity)-(a.http_ms??Infinity)||a.module.localeCompare(b.module));
   put('#services',services.length?services.map(s=>{
     const history=d.trends?.[s.module]||[],containers=members.filter(c=>c.module===s.module);
     const status=s.unhealthy?'헬스 이상':s.oom_history?'OOM 이력':s.error?s.error:s.running<s.total?'일부 중지':s.status>=200&&s.status<300?'HTTP 정상':'HTTP '+s.status;
